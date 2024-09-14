@@ -3,8 +3,8 @@ import builtins
 import collections
 import functools
 
-class Stream:
 
+class Stream:
     def __aiter__(self):
         return self
 
@@ -50,8 +50,8 @@ class Stream:
     async def collect(self):
         return [i async for i in aiter(self)]
 
-class Iter(Stream):
 
+class Iter(Stream):
     def __init__(self, iterable):
         self.iterable = builtins.iter(iterable)
 
@@ -61,6 +61,7 @@ class Iter(Stream):
         except StopIteration:
             raise StopAsyncIteration
 
+
 class Map(Stream):
     def __init__(self, stream, fn):
         self.fn = fn
@@ -68,6 +69,7 @@ class Map(Stream):
 
     async def __anext__(self):
         return self.fn(await anext(self.stream))
+
 
 class Filter(Stream):
     def __init__(self, stream, predicate):
@@ -79,6 +81,7 @@ class Filter(Stream):
             val = await anext(self.stream)
             if self.predicate(val):
                 return val
+
 
 class Buffered(Stream):
     def __init__(self, stream, n):
@@ -101,6 +104,7 @@ class Buffered(Stream):
             val = self.task_queue.popleft()
             return await val
         raise StopAsyncIteration
+
 
 class BufferedUnordered(Stream):
     def __init__(self, stream, n):
@@ -125,15 +129,19 @@ class BufferedUnordered(Stream):
             return await self.completed.pop()
 
         if self.pending:
-            self.completed, self.pending = await asyncio.wait(self.pending, return_when=asyncio.FIRST_COMPLETED)
+            self.completed, self.pending = await asyncio.wait(
+                self.pending, return_when=asyncio.FIRST_COMPLETED
+            )
             return await self.completed.pop()
 
         raise StopAsyncIteration
+
 
 async def _flatten(nested_st):
     async for stream in nested_st:
         async for val in stream:
             yield val
+
 
 class Flatten(Stream):
     def __init__(self, stream):
@@ -142,10 +150,12 @@ class Flatten(Stream):
     async def __anext__(self):
         return await anext(self.stream)
 
+
 async def _flat_map(stream, fn):
     async for stream in stream.map(fn):
         async for val in stream:
             yield val
+
 
 class FlatMap(Stream):
     def __init__(self, stream, fn):
@@ -153,6 +163,7 @@ class FlatMap(Stream):
 
     async def __anext__(self):
         return await anext(self.stream)
+
 
 class Chunks(Stream):
     def __init__(self, stream, n):
@@ -170,6 +181,7 @@ class Chunks(Stream):
             raise StopAsyncIteration
         return chunk
 
+
 class FilterMap(Stream):
     def __init__(self, stream, fn):
         self.stream = stream
@@ -183,11 +195,13 @@ class FilterMap(Stream):
                 case result:
                     return result
 
+
 async def _chain(left, right):
     async for val in left:
         yield val
     async for val in right:
         yield val
+
 
 class Chain(Stream):
     def __init__(self, left, right):
@@ -195,6 +209,7 @@ class Chain(Stream):
 
     async def __anext__(self):
         return await anext(self.stream)
+
 
 class Zip(Stream):
     def __init__(self, left, right):
@@ -204,8 +219,10 @@ class Zip(Stream):
     async def __anext__(self):
         return (await anext(self.left), await anext(self.right))
 
+
 async def _once(value):
     yield value
+
 
 class Once(Stream):
     def __init__(self, value):
@@ -214,11 +231,13 @@ class Once(Stream):
     async def __anext__(self):
         return await anext(self.stream)
 
+
 class Pending(Stream):
     async def __anext__(self):
         # There are no producers for this queue
         # so, it should wait forever
         return await asyncio.Queue().get()
+
 
 class Repeat(Stream):
     def __init__(self, value):
@@ -227,6 +246,7 @@ class Repeat(Stream):
     async def __anext__(self):
         return self.value
 
+
 class RepeatWith(Stream):
     def __init__(self, fn):
         self.fn = fn
@@ -234,9 +254,10 @@ class RepeatWith(Stream):
     async def __anext__(self):
         return self.fn()
 
+
 class _GenStream(Stream):
     def __init__(self, gen):
-        if hasattr(gen, '__aiter__'):
+        if hasattr(gen, "__aiter__"):
             self.gen = gen
         else:
             self.gen = Iter(gen)
