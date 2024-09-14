@@ -80,3 +80,4 @@ strict = true
 [tool.pytest.ini_options]
 # Define the directories where pytest should look for tests
 testpaths = ["tests"]
+pythonpath = "."
