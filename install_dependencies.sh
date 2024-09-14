@@ -5,4 +5,4 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-uv pip install -r <(uv pip compile pyproject.toml)
+uv pip install -r <(uv pip compile pyproject.toml --extra dev)
