@@ -12,10 +12,12 @@ dependencies = [
 # Developer Dependencies
 [project.optional-dependencies]
 dev = [
-    "ruff",     # Fast linter and formatter
-    "mypy",     # Static type checker
-    "pytest",   # Testing framework
-    "pytest-asyncio",  # Asynchronous support for pytest
+    "ruff",                    # Fast linter and formatter
+    "mypy",                    # Static type checker
+    "pytest",                  # Testing framework
+    "pytest-asyncio",          # Asynchronous support for pytest
+    "pytest-cov==5.0.0",       # Coverage plugin for pytest
+    "coverage[toml]==7.3.2",   # Coverage tool with TOML support
 ]
 
 # Tool Configurations
@@ -81,3 +83,34 @@ strict = true
 # Define the directories where pytest should look for tests
 testpaths = ["tests"]
 pythonpath = "."
+
+# Enable coverage reporting within pytest
+addopts = "--cov=kioto --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+# Measure branch coverage in addition to statement
+branch = true
+
+# Define where coverage data files are stored
+data_file = ".coverage"
+
+[tool.coverage.report]
+
+# Show missing lines in the terminal report
+show_missing = true
+
+# Specify the types of reports to generate
+# 'term' for terminal output, 'html' for HTML reports
+report = [
+    "term",
+    "html",
+]
+
+# Specify the precision of the coverage percentages
+precision = 2
+
+# Exclude specific files or directories from the report
+exclude_lines = [
+    "#pragma: no cover",
+    "if __name__ == .__main__.:",
+]
