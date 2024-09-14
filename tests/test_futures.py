@@ -1,0 +1,241 @@
+import asyncio
+import pytest
+
+from kioto.futures.impl import TaskSet
+from kioto.futures.api import ready, select, task_set
+
+
+@pytest.mark.asyncio
+async def test_select_returns_first_completed():
+    async def coro1():
+        await asyncio.sleep(0.2)
+        return "result1"
+
+    async def coro2():
+        await asyncio.sleep(0.1)
+        return "result2"
+
+    ts = task_set(task1=coro1(), task2=coro2())
+
+    name, result = await select(ts)
+    assert name == "task2"
+    assert result == "result2"
+
+    # Now, the remaining task should still be in the TaskSet
+    assert "task1" in ts._tasks
+    assert "task2" not in ts._tasks
+
+    # Select the next task
+    name, result = await select(ts)
+    assert name == "task1"
+    assert result == "result1"
+
+    # TaskSet should now be empty
+    assert not ts
+
+
+@pytest.mark.asyncio
+async def test_select_multiple_completions():
+    async def coro1():
+        await asyncio.sleep(0.1)
+        return "result1"
+
+    async def coro2():
+        await asyncio.sleep(0.1)
+        return "result2"
+
+    async def coro3():
+        await asyncio.sleep(0.2)
+        return "result3"
+
+    ts = task_set(task1=coro1(), task2=coro2(), task3=coro3())
+
+    # Select first completed task (either task1 or task2)
+    name1, result1 = await select(ts)
+    assert name1 in ["task1", "task2"]
+    assert result1 in ["result1", "result2"]
+
+    # Select next completed task
+    name2, result2 = await select(ts)
+    assert name2 in ["task1", "task2"]
+    assert result2 in ["result1", "result2"]
+    assert name2 != name1
+
+    # Select the last task
+    name3, result3 = await select(ts)
+    assert name3 == "task3"
+    assert result3 == "result3"
+
+    assert not ts
+
+
+@pytest.mark.asyncio
+async def test_select_propagates_exceptions():
+    async def coro1():
+        await asyncio.sleep(0.1)
+        raise ValueError("An error occurred in coro1")
+
+    async def coro2():
+        await asyncio.sleep(0.2)
+        return "result2"
+
+    ts = task_set(task1=coro1(), task2=coro2())
+
+    with pytest.raises(ValueError, match="An error occurred in coro1"):
+        await select(ts)
+
+    # After exception, coro2 should still be in the TaskSet
+    assert "task2" in ts._tasks
+    assert "task1" not in ts._tasks
+
+    # Now, select the remaining task
+    name, result = await select(ts)
+    assert name == "task2"
+    assert result == "result2"
+
+    assert not ts
+
+
+@pytest.mark.asyncio
+async def test_task_set_empty():
+    ts = TaskSet({})
+
+    # Calling select on an empty task set should raise an exception
+    with pytest.raises(ValueError):
+        await select(ts)
+
+
+@pytest.mark.asyncio
+async def test_task_set_cancellation():
+    async def coro1():
+        await asyncio.sleep(1)
+        return "result1"
+
+    async def coro2():
+        await asyncio.sleep(2)
+        return "result2"
+
+    ts = task_set(task1=coro1(), task2=coro2())
+
+    # Cancel task1
+    ts.cancel("task1")
+    assert "task1" not in ts._tasks
+
+    # Select should return task2 after 2 seconds
+    name, result = await select(ts)
+    assert name == "task2"
+    assert result == "result2"
+
+    assert not ts
+
+
+@pytest.mark.asyncio
+async def test_task_set_dynamic_addition():
+    async def coro1():
+        await asyncio.sleep(0.1)
+        return "result1"
+
+    async def coro2():
+        await asyncio.sleep(0.2)
+        return "result2"
+
+    async def coro3():
+        await asyncio.sleep(0.0)
+        return "result3"
+
+    ts = task_set(task1=coro1(), task2=coro2())
+
+    name, result = await select(ts)
+    assert name == "task1"
+    assert result == "result1"
+
+    # Dynamically add coro3
+    ts.update("task3", coro3())
+
+    name, result = await select(ts)
+    assert name == "task3"
+    assert result == "result3"
+
+    name, result = await select(ts)
+    assert name == "task2"
+    assert result == "result2"
+
+    assert not ts
+
+
+@pytest.mark.asyncio
+async def test_task_set_duplicate_task_names():
+    async def coro1():
+        await asyncio.sleep(0.1)
+        return "result1"
+
+    ts = task_set(task1=coro1())
+
+    with pytest.raises(ValueError, match="Task with name 'task1' already exists"):
+        ts.update("task1", coro1())
+
+
+@pytest.mark.asyncio
+async def test_task_set_cancel_all():
+    async def coro1():
+        await asyncio.sleep(1)
+        return "result1"
+
+    async def coro2():
+        await asyncio.sleep(1)
+        return "result2"
+
+    ts = task_set(task1=coro1(), task2=coro2())
+    tasks = ts.get_tasks()
+
+    ts.cancel_all()
+    assert not ts._tasks
+
+    # Ensure tasks are cancelled
+    for task in tasks:
+        assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_ready_coroutine():
+    result = "test_result"
+    res = await ready(result)
+    assert res == result
+
+
+@pytest.mark.asyncio
+async def test_task_set_non_coroutine_input():
+    with pytest.raises(
+        ValueError, match="All arguments to task_set must be coroutine objects."
+    ):
+        ts = task_set(task1="not a coroutine")
+
+
+@pytest.mark.asyncio
+async def test_task_set_partial_completion():
+    async def coro1():
+        await asyncio.sleep(0.1)
+        return "result1"
+
+    async def coro2():
+        await asyncio.sleep(0.2)
+        return "result2"
+
+    ts = task_set(task1=coro1(), task2=coro2())
+
+    # Select first task
+    name1, result1 = await select(ts)
+    assert name1 == "task1"
+    assert result1 == "result1"
+
+    # Only task2 remains
+    assert "task2" in ts._tasks
+    assert "task1" not in ts._tasks
+
+    # Now cancel task2
+    ts.cancel("task2")
+    assert not ts
+
+    # Attempting to select should raise ValueError
+    with pytest.raises(ValueError):
+        await select(ts)
