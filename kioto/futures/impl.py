@@ -67,3 +67,37 @@ class TaskSet:
             if task and not task.done():
                 task.cancel()
         self._tasks.clear()
+
+class Shared:
+
+    def __init__(self, coro):
+        self._coro = coro
+        self._result = None
+        self._lock = asyncio.Lock()
+
+    def __await__(self):
+        async def shared_coro():
+            # If the result has already been resolved return it
+            if self._result is not None:
+                if isinstance(self._result, Exception):
+                    raise self._result
+                return self._result
+
+            async with self._lock:
+                # Its possible that the result was resolved while
+                # we waited to acquire the lock - if so return it.
+                if self._result is not None:
+                    if isinstance(self._result, Exception):
+                        raise self._result
+                    return self._result
+
+                # Otherwise we need to evaluate the coroutine and cache the result
+                try:
+                    self._result = await self._coro
+                except Exception as e:
+                    self._result = e
+                    raise self._result
+
+                return self._result
+
+        return shared_coro().__await__()

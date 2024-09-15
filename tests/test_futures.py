@@ -2,7 +2,7 @@ import asyncio
 import pytest
 
 from kioto.futures.impl import TaskSet
-from kioto.futures.api import ready, select, task_set
+from kioto.futures.api import ready, select, task_set, pending, shared, lazy
 
 
 @pytest.mark.asyncio
@@ -239,3 +239,130 @@ async def test_task_set_partial_completion():
     # Attempting to select should raise ValueError
     with pytest.raises(ValueError):
         await select(ts)
+
+@pytest.mark.asyncio
+async def test_pending():
+    """
+    Test that `pending` coroutine never completes.
+    """
+    # Create a task for pending
+    task = asyncio.create_task(pending())
+
+    # Wait for a short duration to ensure it's still pending
+    await asyncio.sleep(0.1)
+    assert not task.done()
+
+    # Optionally, cancel the task to clean up
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+@pytest.mark.asyncio
+async def test_shared_multiple_awaiters():
+    """
+    Test that multiple awaiters receive the same result from a Shared coroutine.
+    """
+    execution_count = 0
+
+    async def coro():
+        nonlocal execution_count
+        execution_count += 1
+        await asyncio.sleep(0.1)
+        return "shared_result"
+
+    shared_handle = shared(coro())
+
+    # Unlike create_task, shared does nothing until awaited
+    assert execution_count == 0
+
+    # Create multiple awaiters
+    result1 = await shared_handle
+    result2 = await shared_handle
+    result3 = await shared_handle
+
+    assert result1 == "shared_result"
+    assert result2 == "shared_result"
+    assert result3 == "shared_result"
+    assert execution_count == 1  # Ensure the coroutine was executed only once
+
+@pytest.mark.asyncio
+async def test_shared_exception_propagation():
+    """
+    Test that exceptions raised by the Shared coroutine are propagated to all awaiters.
+    """
+    async def coro():
+        await asyncio.sleep(0.1)
+        raise ValueError("Test exception in Shared coroutine")
+
+    shared_handle = shared(coro())
+
+    # Define a helper to await and capture exceptions
+    async def await_shared():
+        try:
+            await shared_handle
+        except Exception as e:
+            return e
+
+    # Create multiple awaiters
+    exception1 = await await_shared()
+    exception2 = await await_shared()
+    exception3 = await await_shared()
+
+    assert isinstance(exception1, ValueError)
+    assert str(exception1) == "Test exception in Shared coroutine"
+    assert isinstance(exception2, ValueError)
+    assert str(exception2) == "Test exception in Shared coroutine"
+    assert isinstance(exception3, ValueError)
+    assert str(exception3) == "Test exception in Shared coroutine"
+
+@pytest.mark.asyncio
+async def test_shared_exception_execution_count():
+    """
+    Test that the Shared coroutine is executed only once even if it raises an exception.
+    """
+    execution_count = 0
+
+    async def coro():
+        nonlocal execution_count
+        execution_count += 1
+        await asyncio.sleep(0.1)
+        raise RuntimeError("Shared coroutine error")
+
+    shared_handle = shared(coro())
+
+    # Define a helper to await and capture exceptions
+    async def await_shared():
+        try:
+            await shared_handle
+        except Exception as e:
+            return e
+
+    # Create multiple awaiters
+    exception1 = await await_shared()
+    exception2 = await await_shared()
+
+    assert isinstance(exception1, RuntimeError)
+    assert str(exception1) == "Shared coroutine error"
+    assert isinstance(exception2, RuntimeError)
+    assert str(exception2) == "Shared coroutine error"
+    assert execution_count == 1  # Ensure the coroutine was executed only once
+
+@pytest.mark.asyncio
+async def test_lazy():
+    """
+    Test that `lazy` evaluates the function when awaited.
+    """
+    def add(a, b):
+        return a + b
+
+    lazy_coro = lazy(lambda: add(2, 3))
+    result = await lazy_coro
+    assert result == 5
+
+    # Test with a function that raises an exception
+    def raise_error():
+        raise ValueError("Test error")
+
+    lazy_error = lazy(raise_error)
+    with pytest.raises(ValueError, match="Test error"):
+        await lazy_error

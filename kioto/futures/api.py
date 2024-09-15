@@ -56,3 +56,18 @@ async def select(task_group: impl.TaskSet) -> Tuple[str, Any]:
 
     return result
 
+
+async def pending():
+    """Returns a coroutine that never completes."""
+    # The futures result is never set - so it will never complete
+    return await asyncio.Future()
+
+
+def shared(coro):
+    """Returns a handle to a future allowing multiple tasks to await it."""
+    return impl.Shared(coro)
+
+
+async def lazy(fn):
+    """Wraps a callable into a coroutine that evaluates the function when awaited."""
+    return fn()
