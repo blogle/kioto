@@ -1,1 +1,1 @@
-from kioto import futures, streams, sink
+from kioto import channels, futures, streams, sink
