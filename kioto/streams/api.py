@@ -1,3 +1,4 @@
+import functools
 from kioto.streams import impl
 
 

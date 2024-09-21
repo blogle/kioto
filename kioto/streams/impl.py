@@ -1,8 +1,6 @@
 import asyncio
 import builtins
 import collections
-import functools
-
 
 class Stream:
     def __aiter__(self):
