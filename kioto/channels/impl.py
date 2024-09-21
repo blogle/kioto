@@ -201,3 +201,4 @@ class ReceiverStream(Stream):
             return await self._receiver.recv()
         except Exception:
             raise StopAsyncIteration
+

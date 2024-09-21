@@ -1,1 +1,1 @@
-from kioto.channels.api import channel, channel_unbounded
+from kioto.channels.api import channel, channel_unbounded, oneshot_channel

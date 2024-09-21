@@ -2,7 +2,7 @@ import asyncio
 import pytest
 
 from kioto import streams
-from kioto.channels import channel, channel_unbounded
+from kioto.channels import channel, channel_unbounded, oneshot_channel
 
 @pytest.mark.asyncio
 async def test_channel_send_recv_unbounded():
@@ -173,3 +173,58 @@ async def test_channel_tx_sink_close():
 
     await sink_task
 
+@pytest.mark.asyncio
+async def test_oneshot_channel():
+    tx, rx = oneshot_channel()
+    tx.send(1)
+    result = await rx
+    assert 1 == result
+
+@pytest.mark.asyncio
+async def test_oneshot_channel_send_exhausted():
+    tx, rx = oneshot_channel()
+    tx.send(1)
+    result = await rx
+
+    # You can only send on the channel once!
+    with pytest.raises(RuntimeError):
+        tx.send(2)
+
+@pytest.mark.asyncio
+async def test_oneshot_channel_recv_exhausted():
+    tx, rx = oneshot_channel()
+    tx.send(1)
+
+    result = await rx
+
+    # You can only await the recv'ing end once
+    with pytest.raises(RuntimeError):
+        await rx
+
+@pytest.mark.asyncio
+async def test_channel_req_resp():
+
+    # A common pattern for using oneshot is to implement a request response interface
+
+    async def worker_task(rx):
+        async for request in rx:
+            tx, request_arg = request
+            tx.send(request_arg + 1)
+
+    tx, rx = channel(3)
+
+    async def add_one(arg):
+        once_tx, once_rx = oneshot_channel()
+        tx.send((once_tx, arg))
+        return await once_rx
+
+    # Spawn the worker task
+    rx_stream = rx.into_stream()
+    worker = asyncio.create_task(worker_task(rx_stream))
+
+    assert 2 == await add_one(1)
+    assert 3 == await add_one(2)
+    assert 4 == await add_one(3)
+
+    # Shutdown the worker task
+    worker.cancel()
