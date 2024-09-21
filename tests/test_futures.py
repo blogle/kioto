@@ -171,8 +171,12 @@ async def test_task_set_duplicate_task_names():
 
     ts = task_set(task1=coro1())
 
+    new_task = coro1()
     with pytest.raises(ValueError, match="Task with name 'task1' already exists"):
-        ts.update("task1", coro1())
+        ts.update("task1", new_task)
+
+    # Await the task to silence warnings
+    await new_task
 
 
 @pytest.mark.asyncio
