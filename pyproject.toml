@@ -99,13 +99,6 @@ data_file = ".coverage"
 # Show missing lines in the terminal report
 show_missing = true
 
-# Specify the types of reports to generate
-# 'term' for terminal output, 'html' for HTML reports
-report = [
-    "term",
-    "html",
-]
-
 # Specify the precision of the coverage percentages
 precision = 2
 
