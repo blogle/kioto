@@ -270,3 +270,21 @@ async def test_map_fold():
     a = streams.iter(range(10)).map(f).fold(lambda acc, val: acc + val, 0)
     b = streams.iter(range(10)).fold(lambda acc, val: acc + f(val), 0)
     assert await a == await b
+
+@pytest.mark.asyncio
+async def test_stream_select():
+
+    select_stream = streams.select(
+        odds=streams.iter([1, 3, 5, 7]),
+        evens=streams.iter([2, 4, 6])
+    )
+
+    def to_even(result):
+        match result:
+            case "odds", number:
+                return number + 1
+            case "evens", number:
+                return number
+
+    results = await select_stream.map(to_even).collect()
+    assert set(results) == {2, 2, 4, 4, 6, 6, 8}

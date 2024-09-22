@@ -2,6 +2,10 @@ import asyncio
 import builtins
 import collections
 
+from typing import Dict
+
+from kioto.futures import task_set
+
 class Stream:
     def __aiter__(self):
         return self
@@ -262,3 +266,22 @@ class _GenStream(Stream):
 
     async def __anext__(self):
         return await anext(self.gen)
+
+class StreamSet:
+    def __init__(self, streams: Dict[str, Stream]):
+        tasks = {}
+        for name, stream in streams.items():
+            tasks[name] = anext(stream)
+
+        self._streams = streams
+        self._task_set = task_set(**tasks)
+
+    def task_set(self):
+        return self._task_set
+
+    def poll_again(self, name):
+        stream = self._streams[name]
+        self._task_set.update(name, anext(stream))
+
+    def __bool__(self):
+        return bool(self._task_set)

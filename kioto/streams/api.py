@@ -1,6 +1,7 @@
 import functools
-from kioto.streams import impl
 
+from kioto import futures
+from kioto.streams import impl
 
 # This is the python equivalent to tokio stream::iter(iterable)
 def iter(iterable) -> impl.Stream:
@@ -50,3 +51,19 @@ def async_stream(f):
         return impl.Stream.from_generator(f(*args, **kwargs))
 
     return stream
+
+#def stream_set(**streams):
+#    return impl.StreamSet(streams)
+
+@async_stream
+async def select(**streams):
+    group = impl.StreamSet(streams)
+    while group.task_set():
+        try:
+            name, result = await futures.select(group.task_set())
+        except StopAsyncIteration:
+            pass
+        else:
+            group.poll_again(name)
+
+        yield name, result

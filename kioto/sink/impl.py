@@ -173,5 +173,3 @@ class Fanout(Sink):
                     close_group.create_task(
                         sink.close()
                     )
-
-

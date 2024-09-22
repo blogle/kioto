@@ -45,8 +45,12 @@ async def select(task_group: impl.TaskSet) -> Tuple[str, Any]:
     result = None
     for task in done:
         name = task_group.pop_task(task)
-        # Directly retrieve the result; let exceptions propagate
-        task_result = task.result()
+        # Directly retrieve the result, capture exceptions for now so we can
+        # handle any other completed results and requeue them for polling
+        try:
+            task_result = task.result()
+        except Exception as e:
+            task_result = e
 
         if result is None:
             result = (name, task_result)
@@ -54,7 +58,11 @@ async def select(task_group: impl.TaskSet) -> Tuple[str, Any]:
             # Re-queue the task with its result if needed
             task_group.update(name, ready(task_result))
 
-    return result
+    # If the task encountered an exception, re-raise
+    name, value = result
+    if isinstance(value, Exception):
+        raise value
+    return name, value
 
 
 async def pending():
