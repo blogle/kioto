@@ -35,25 +35,8 @@ class Sender:
     Sender class providing synchronous and asynchronous send methods.
     """
     def __init__(self, channel: Channel):
-        self._chan = channel
-
-        # Register sender and finalizer
-        self._chan.register_sender(self)
-        self._finalizer = weakref.finalize(self, self._close)
-
-    def _close(self):
-        if hasattr(self, "_chan"):
-            # Deregister ourselves from the channel
-            self._chan._senders.discard(self)
-            # Drop our reference to the channel
-            del self._chan
-
-    @property
-    def _channel(self):
-        try:
-            return self._chan
-        except AttributeError:
-            raise RuntimeError("Channel is closed!")
+        self._channel = channel
+        self._channel.register_sender(self)
 
     async def send_async(self, item: Any):
         """
@@ -105,26 +88,8 @@ class Receiver:
     Receiver class providing synchronous and asynchronous recv methods.
     """
     def __init__(self, channel: Channel):
-        self._chan = channel
-
-        # Register receiver and finalizer
-        self._finalizer = weakref.finalize(self, self._close)
+        self._channel = channel
         self._channel.register_receiver(self)
-
-    def _close(self):
-        """
-        Synchronously close the receiver.
-        """
-        if hasattr(self, "_chan"):
-            self._chan._receivers.discard(self)
-            del self._chan
-
-    @property
-    def _channel(self):
-        try:
-            return self._chan
-        except AttributeError:
-            raise RuntimeError("Channel is closed!")
 
     async def recv(self) -> Any:
         """
@@ -136,7 +101,13 @@ class Receiver:
         Raises:
             RuntimeError: If no senders exist and the queue is empty.
         """
-        if self._channel.empty() and not self._channel.has_senders():
+
+        # If there is data in the queue, then we can immediately read it
+        if not self._channel.empty():
+            self._channel.sync_queue.task_done()
+            return self._channel.sync_queue.get_nowait()
+
+        if not self._channel.has_senders():
             raise RuntimeError("No senders exist. Cannot receive.")
 
         item = await self._channel.sync_queue.get()
@@ -165,6 +136,7 @@ class SenderSink(Sink):
     """
     def __init__(self, sender: Sender):
         self._sender = sender
+        self._channel = sender._channel
         self._closed = False
 
     async def feed(self, item: Any):
@@ -181,12 +153,13 @@ class SenderSink(Sink):
     async def flush(self):
         if self._closed:
             raise RuntimeError("Cannot flush a closed Sink.")
-        await self._sender._channel.sync_queue.join()
+        await self._channel.sync_queue.join()
 
     async def close(self):
         if not self._closed:
+            del self._sender
+            await self.flush()
             self._closed = True
-            self._sender._close()
 
 
 class ReceiverStream(Stream):

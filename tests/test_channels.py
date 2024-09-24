@@ -56,8 +56,7 @@ async def test_channel_drop_sender():
     tx, rx = channel(1)
     tx.send(1)
 
-    # This should be called when the sender is garbage collected
-    tx._close()
+    del tx
 
     result = await rx.recv()
     assert 1 == result
@@ -70,8 +69,7 @@ async def test_channel_drop_sender():
 async def test_channel_drop_recv():
     tx, rx = channel(1)
 
-    # This should be called when the receiver is garbage collected
-    rx._close()
+    del rx
 
     # No receivers exist to receive the sent data
     with pytest.raises(RuntimeError):
@@ -81,7 +79,7 @@ async def test_channel_drop_recv():
 async def test_channel_send_on_closed():
     tx, rx = channel(1)
 
-    tx._close()
+    del rx
     with pytest.raises(RuntimeError):
         tx.send(1)
 
@@ -89,7 +87,7 @@ async def test_channel_send_on_closed():
 async def test_channel_recv_on_closed():
     tx, rx = channel(1)
 
-    rx._close()
+    del tx
     with pytest.raises(RuntimeError):
         await rx.recv()
 
@@ -102,8 +100,7 @@ async def test_channel_rx_stream():
     for x in range(5):
         tx.send(x)
 
-    # This should be called when the receiver is garbage collected
-    tx._close()
+    del tx
 
     evens = await rx_stream.filter(lambda x: x % 2 == 0).collect()
     assert [0, 2, 4] == evens
@@ -155,8 +152,13 @@ async def test_channel_tx_sink_feed_send():
 
 @pytest.mark.asyncio
 async def test_channel_tx_sink_close():
-    tx, rx = channel(3)
-    tx_sink = tx.into_sink()
+
+    def make_sink_rx():
+        tx, rx = channel(4)
+        tx_sink = tx.into_sink()
+        return tx_sink, rx
+
+    tx_sink, rx = make_sink_rx()
 
     async def sender(sink):
         # Note: This function is actually generic across all sink impls!
