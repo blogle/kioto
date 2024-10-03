@@ -1,6 +1,7 @@
 import asyncio
 import weakref
-from typing import Any
+from collections import deque
+from typing import Any, Callable
 
 from kioto.streams import Stream
 from kioto.sink import Sink
@@ -175,3 +176,183 @@ class ReceiverStream(Stream):
         except Exception:
             raise StopAsyncIteration
 
+class WatchChannel:
+
+    def __init__(self, initial_value: Any):
+        # Deque with maxlen=1 to store the current value
+        self._queue = deque([initial_value], maxlen=1)
+        self._version = 0  # Tracks the version of the current value
+        self._condition = asyncio.Condition()  # Synchronization primitive
+        self._senders = weakref.WeakSet()
+        self._receivers = weakref.WeakSet()
+
+    def register_sender(self, sender: 'WatchSender'):
+        """
+        Register a new sender to the channel.
+        """
+        self._senders.add(sender)
+
+    def register_receiver(self, receiver: 'WatchReceiver'):
+        """
+        Register a new receiver to the channel.
+        """
+        self._receivers.add(receiver)
+
+    def has_senders(self) -> bool:
+        """
+        Check if there are any active receivers.
+        """
+        return len(self._senders) > 0
+
+    def has_receivers(self) -> bool:
+        """
+        Check if there are any active receivers.
+        """
+        return len(self._receivers) > 0
+
+    def get_current_value(self) -> Any:
+        """
+        Retrieve the current value from the channel.
+        """
+        return self._queue[0]
+
+    def set_value(self, value: Any):
+        """
+        Set a new value in the channel and increment the version.
+        """
+        self._queue.append(value)
+        self._version += 1
+
+
+class WatchSender:
+    """
+    Sender class providing methods to send and modify values in the watch channel.
+    """
+    def __init__(self, channel: WatchChannel):
+        self._channel = channel
+        self._channel.register_sender(self)
+
+    def subscribe(self) -> 'WatchReceiver':
+        """
+        Create a new receiver who is subscribed to this sender
+        """
+        return WatchReceiver(self._channel)
+
+    def receiver_count(self) -> int:
+        """
+        Get the number of active receivers.
+        """
+        return len(self._channel._receivers)
+
+    async def send(self, value: Any):
+        """
+        Asynchronously send a new value to the channel.
+
+        Args:
+            value (Any): The value to send.
+
+        Raises:
+            RuntimeError: If the sender is closed or no receivers exist.
+        """
+        if not self._channel.has_receivers():
+            raise RuntimeError("No receivers exist. Cannot send.")
+        async with self._channel._condition:
+            self._channel.set_value(value)
+            self._channel._condition.notify_all()  # Notify all waiting receivers
+
+    async def send_modify(self, func: Callable[[Any], Any]):
+        """
+        Modify the current value using a provided function and send the updated value.
+
+        Args:
+            func (Callable[[Any], Any]): Function to modify the current value.
+
+        Raises:
+            RuntimeError: If the sender is closed or no receivers exist.
+        """
+        if not self._channel.has_receivers():
+            raise RuntimeError("No receivers exist. Cannot send.")
+        async with self._channel._condition:
+            current = self._channel.get_current_value()
+            new_value = func(current)
+            self._channel.set_value(new_value)
+            self._channel._condition.notify_all()
+
+    async def send_if_modified(self, func: Callable[[Any], Any]):
+        """
+        Modify the current value using a provided function and send the updated value only if it has changed.
+
+        Args:
+            func (Callable[[Any], Any]): Function to modify the current value.
+
+        Raises:
+            RuntimeError: If the sender is closed or no receivers exist.
+        """
+        if not self._channel.has_receivers():
+            raise RuntimeError("No receivers exist. Cannot send.")
+        async with self._channel._condition:
+            current = self._channel.get_current_value()
+            new_value = func(current)
+            if new_value != current:
+                self._channel.set_value(new_value)
+                self._channel._condition.notify_all()
+
+    def borrow(self) -> Any:
+        """
+        Borrow the current value without marking it as seen.
+
+        Returns:
+            Any: The current value.
+        """
+        return self._channel.get_current_value()
+
+class WatchReceiver:
+    """
+    Receiver class providing methods to access and await changes in the watch channel.
+    """
+    def __init__(self, channel: WatchChannel):
+        self._channel = channel
+        self._last_version = channel._version  # Initialize with the current version
+        self._channel.register_receiver(self)
+
+    def borrow(self) -> Any:
+        """
+        Borrow the current value without marking it as seen.
+
+        Returns:
+            Any: The current value.
+        """
+        return self._channel.get_current_value()
+
+    def borrow_and_update(self) -> Any:
+        """
+        Borrow the current value and mark it as seen.
+
+        Returns:
+            Any: The current value.
+        """
+        value = self._channel.get_current_value()
+        self._last_version = self._channel._version
+        return value
+
+    async def changed(self):
+        """
+        Wait for the channel to have a new value that hasn't been seen yet.
+
+        Raises:
+            RuntimeError: If the sender has been closed and no new values are available.
+        """
+        async with self._channel._condition:
+            if self._channel._version > self._last_version:
+                # New value already available
+                self._last_version = self._channel._version
+                return
+            while self._channel.has_senders() and self._channel._version <= self._last_version:
+                await self._channel._condition.wait()
+            if self._channel._version > self._last_version:
+                # New value received
+                self._last_version = self._channel._version
+                return
+            else:
+                # Sender has been closed and no new values
+                raise RuntimeError("Sender has been closed and no new values are available.")

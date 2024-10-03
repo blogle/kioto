@@ -2,7 +2,7 @@ import asyncio
 import pytest
 
 from kioto import streams
-from kioto.channels import channel, channel_unbounded, oneshot_channel
+from kioto.channels import channel, channel_unbounded, oneshot_channel, watch
 
 @pytest.mark.asyncio
 async def test_channel_send_recv_unbounded():
@@ -230,3 +230,77 @@ async def test_channel_req_resp():
 
     # Shutdown the worker task
     worker.cancel()
+
+
+@pytest.mark.asyncio
+async def test_watch_channel_send_recv():
+    tx, rx = watch(1)
+
+    await tx.send(2)
+    await tx.send(3)
+
+    assert 3 == rx.borrow()
+
+@pytest.mark.asyncio
+async def test_watch_channel_send_modify():
+    tx, rx = watch(1)
+
+    await tx.send_modify(lambda x: x + 1)
+    await tx.send_modify(lambda x: x * 2)
+
+    assert 4 == rx.borrow()
+
+@pytest.mark.asyncio
+async def test_watch_channel_send_if_modified():
+    tx, rx = watch(1)
+
+    # Get the current version of the watch channel
+    version = rx._last_version
+
+    # Send a modified value if the condition is met
+    await tx.send_if_modified(lambda x: x + 1)
+
+    # Borrow and update the value from the receiver
+    value = rx.borrow_and_update()
+    assert value == 2
+
+    # Ensure the version has changed after modification
+    new_version = rx._last_version
+    assert new_version != version
+
+    # Attempt to send a value that does not modify the current value
+    await tx.send_if_modified(lambda x: x)
+
+    # Ensure the version has not changed and the value remains the same
+    assert rx._last_version == new_version
+    assert 2 == rx.borrow_and_update()
+
+@pytest.mark.asyncio
+async def test_watch_channel_no_receivers():
+    tx, rx = watch(1)
+    del rx
+
+    with pytest.raises(RuntimeError, match="No receivers exist. Cannot send."):
+        await tx.send(2)
+
+@pytest.mark.asyncio
+async def test_watch_channel_borrow_and_update():
+    tx, rx = watch(1)
+
+    await tx.send(2)
+    assert 2 == rx.borrow_and_update()
+
+    await tx.send(3)
+    assert 3 == rx.borrow_and_update()
+
+@pytest.mark.asyncio
+async def test_watch_channel_changed():
+    tx, rx = watch(1)
+
+    await tx.send(2)
+    await rx.changed()
+    assert 2 == rx.borrow_and_update()
+
+    await tx.send(3)
+    await rx.changed()
+    assert 3 == rx.borrow_and_update()

@@ -1,5 +1,6 @@
 import asyncio
 from kioto.channels import impl
+from typing import Any
 
 def channel(capacity: int) -> tuple[impl.Sender, impl.Receiver]:
     channel = impl.Channel(capacity)
@@ -31,3 +32,9 @@ def oneshot_channel():
         return await channel
 
     return OneShotSender(), receiver()
+
+def watch(initial_value: Any) -> tuple[impl.WatchSender, impl.WatchReceiver]:
+    channel = impl.WatchChannel(initial_value)
+    sender = impl.WatchSender(channel)
+    receiver = impl.WatchReceiver(channel)
+    return sender, receiver
