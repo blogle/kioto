@@ -2,7 +2,7 @@ import asyncio
 import pytest
 
 from kioto.futures.impl import TaskSet
-from kioto.futures.api import ready, select, task_set, pending, shared, lazy
+from kioto.futures.api import ready, select, task_set, pending, shared, lazy, try_join
 
 
 @pytest.mark.asyncio
@@ -370,3 +370,26 @@ async def test_lazy():
     lazy_error = lazy(raise_error)
     with pytest.raises(ValueError, match="Test error"):
         await lazy_error
+
+@pytest.mark.asyncio
+async def test_try_join():
+
+    async def a():
+        return "a"
+
+    async def b():
+        return "b"
+
+    results = await try_join(a(), b())
+    assert results == ["a", "b"]
+
+@pytest.mark.asyncio
+async def test_try_join_exception():
+    async def a():
+        raise ValueError("fail")
+
+    async def b():
+        return "b"
+
+    with pytest.raises(ValueError):
+        await try_join(a(), b())

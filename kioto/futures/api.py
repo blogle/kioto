@@ -79,3 +79,19 @@ def shared(coro):
 async def lazy(fn):
     """Wraps a callable into a coroutine that evaluates the function when awaited."""
     return fn()
+
+
+async def try_join(*coros):
+    """
+    Awaits all coroutines in the provided list and returns a list of their results.
+
+    If an exception is encountered, its raised and the remaining tasks are cancelled.
+    """
+    try:
+        pending = []
+        async with asyncio.TaskGroup() as group:
+            for coro in coros:
+                pending.append(group.create_task(coro))
+        return [task.result() for task in pending]
+    except Exception as e:
+        raise e.exceptions[0]
