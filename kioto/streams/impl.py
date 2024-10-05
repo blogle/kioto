@@ -4,7 +4,7 @@ import collections
 
 from typing import Dict
 
-from kioto.futures import task_set
+from kioto.futures import task_set, pending
 
 class Stream:
     def __aiter__(self):
@@ -34,6 +34,9 @@ class Stream:
 
     def chunks(self, n):
         return Chunks(self, n)
+
+    def ready_chunks(self, n):
+        return ReadyChunks(self, n)
 
     def filter_map(self, fn):
         return FilterMap(self, fn)
@@ -184,6 +187,46 @@ class Chunks(Stream):
         return chunk
 
 
+async def spawn(n):
+    queue = asyncio.Queue(maxsize=n)
+
+
+class ReadyChunks(Stream):
+    def __init__(self, stream, n):
+        self.n = n
+        self.stream = stream
+        self.pending = None
+        self.buffer = asyncio.Queue(maxsize=n)
+
+    async def push_anext(self):
+        elem = await anext(self.stream)
+        await self.buffer.put(elem)
+
+    async def __anext__(self):
+        chunk = []
+        # Guarantee that we have at least one element in the buffer
+        if self.pending:
+            await self.pending
+        else:
+            await self.push_anext()
+
+        # While we have elements in the buffer, we will return them
+        for _ in range(self.n):
+            try:
+                chunk.append(
+                    self.buffer.get_nowait()
+                )
+            except asyncio.QueueEmpty:
+                return chunk
+
+            self.pending = asyncio.create_task(self.push_anext())
+            # Yield back to the event loop to allow the pending task to run
+            await asyncio.sleep(0)
+
+        return chunk
+
+
+
 class FilterMap(Stream):
     def __init__(self, stream, fn):
         self.stream = stream
@@ -236,9 +279,7 @@ class Once(Stream):
 
 class Pending(Stream):
     async def __anext__(self):
-        # There are no producers for this queue
-        # so, it should wait forever
-        return await asyncio.Queue().get()
+        return await pending()
 
 
 class Repeat(Stream):

@@ -3,6 +3,7 @@ import pytest
 import time
 
 from kioto import streams
+from kioto.channels import channel
 
 @pytest.mark.asyncio
 async def test_iter():
@@ -179,6 +180,35 @@ async def test_chunks():
     # Ensure iteration (within the collect) works
     result = await stream.collect()
     assert result == [[3, 4, 5], [6, 7, 8], [9]]
+
+@pytest.mark.asyncio
+async def test_ready_chunks():
+    tx, rx = channel(10)
+    stream = rx.into_stream().ready_chunks(3)
+
+    tx.send(0)
+    tx.send(1)
+    tx.send(2)
+
+    # Ensure anext works
+    assert await anext(stream) == [0, 1, 2]
+
+    tx.send(3)
+    tx.send(4)
+
+    # Ensure anext works - returning the available chunk
+    assert await anext(stream) == [3, 4]
+
+    for i in range(5, 10):
+        tx.send(i)
+
+    # Drop the sender - no more messages will be coming
+    del tx
+
+    # Ensure iteration (within the collect) works
+    result = await stream.collect()
+    assert result == [[5, 6, 7], [8, 9]]
+
 
 @pytest.mark.asyncio
 async def test_filter_map():
