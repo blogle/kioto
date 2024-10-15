@@ -1,0 +1,44 @@
+name: "Release"
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on tags like v1.0.0
+
+jobs:
+  pypi-publish:
+    name: Upload to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      contents: read  # Allows checking out the repository
+      id-token: write  # Required for some authentication flows, kept as per original
+      # Optionally, you can restrict permissions further if needed
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Install uv
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      # Step 3: Set up Python environment
+      - name: Set up Python
+        run: uv python install
+
+      # Step 4: Install project dependencies, including dev dependencies
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      # Step 5: Build the distribution packages (wheels and sdist)
+      - name: Build Wheels
+        run: uv build
+
+      # Step 6: Publish the built wheels to PyPI
+      - name: Publish to PyPi
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}  # Ensure this secret is set in your repo
+        run: uv publish -v dist/*
