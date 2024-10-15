@@ -32,7 +32,7 @@ async def consumer(receiver):
     while item := await receiver.recv()
         print(f"Received: {item}")
 
-def pipeline()
+def pipeline():
     sender, receiver = channel(10)
     return asyncio.gather(producer(sender), consumer(receiver))
 
@@ -58,8 +58,8 @@ async def process_data():
 
 async def main():
     tasks = task_set(fetch=fetch_data(), process=process_data())
-    while result := await select(tasks):
-        match result:
+    while tasks:
+        match await select(tasks):
             case "fetch", result:
                 print(f"fetched: {result}")
                 # Dispatch or handle the fetched data
