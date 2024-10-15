@@ -2,7 +2,7 @@
 name = "kioto"
 version = "0.1.0"
 description = "Async utilities library inspired by Tokio"
-authors = ["Brandon Ogle <oglebrandon@gmail.com>"]
+authors = [{name="Brandon Ogle", email="oglebrandon@gmail.com"}]
 requires-python = ">=3.8"
 
 # Runtime Dependencies
@@ -20,6 +20,11 @@ dev = [
     "pytest-cov==5.0.0",       # Coverage plugin for pytest
     "coverage[toml]==7.3.2",   # Coverage tool with TOML support
 ]
+
+# Build
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
 
 # Tool Configurations
 
