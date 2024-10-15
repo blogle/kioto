@@ -2,6 +2,7 @@
 name = "kioto"
 version = "0.1.0"
 description = "Async utilities library inspired by Tokio"
+readme = "README.md"
 authors = [{name="Brandon Ogle", email="oglebrandon@gmail.com"}]
 requires-python = ">=3.8"
 
