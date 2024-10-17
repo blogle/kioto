@@ -1,0 +1,29 @@
+name: autofix
+on:
+  workflow_call:
+    pull_request:
+      push:
+        branches: ["master"]
+
+permissions:
+  contents: read
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Ruff 
+        run: uv add ruff 
+
+      - name: Lint
+        run: uv run ruff check --fix-only .
+
+      - name: Format
+        run: uv run ruff format .
+
+      - uses: autofix-ci/action@dd55f44df8f7cdb7a6bf74c78677eb8acd40cd0a
