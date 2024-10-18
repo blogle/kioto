@@ -1,4 +1,7 @@
 # Kioto
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/blogle/kioto/ci.yml)
+![Codecov](https://img.shields.io/codecov/c/github/blogle/kioto)
+![PyPI - Version](https://img.shields.io/pypi/v/kioto)
 
 **Kioto** is an asynchronous utilities library for Python, inspired by [Tokio](https://tokio.rs/) from Rust. Leveraging Python's `asyncio`, Kioto provides a suite of powerful async utilities and data structures, enabling developers to build efficient and scalable asynchronous applications with ease.
 
