@@ -356,3 +356,39 @@ class WatchReceiver:
             else:
                 # Sender has been closed and no new values
                 raise RuntimeError("Sender has been closed and no new values are available.")
+
+    def into_stream(self) -> 'WatchReceiverStream':
+        """
+        Convert this WatchReceiver into a WatchReceiverStream.
+
+        Returns:
+            WatchReceiverStream: A Stream implementation wrapping this WatchReceiver.
+        """
+        return WatchReceiverStream(self)
+
+async def _watch_stream(receiver):
+    # Return the initial value in the watch
+    yield receiver.borrow()
+
+    # Otherwise only yield changes
+    while True:
+        try:
+            await receiver.changed()
+            yield receiver.borrow_and_update()
+        except RuntimeError as e:
+            break
+
+
+class WatchReceiverStream(Stream):
+    """
+    Stream implementation that wraps a WatchReceiver, allowing integration with Stream interfaces.
+    """
+    def __init__(self, receiver: Receiver):
+        self._stream = _watch_stream(receiver)
+
+    async def __aiter__(self):
+        return self._stream
+
+    async def __anext__(self):
+        return await anext(self._stream)
+

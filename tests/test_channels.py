@@ -304,3 +304,29 @@ async def test_watch_channel_changed():
     await tx.send(3)
     await rx.changed()
     assert 3 == rx.borrow_and_update()
+
+@pytest.mark.asyncio
+async def test_watch_channel_receiver_stream():
+    tx, rx = watch(1)
+    rx_stream = rx.into_stream()
+
+    # Receiver will see all items if the calls are interleaved
+    assert 1 == await anext(rx_stream)
+
+    await tx.send(2)
+    assert 2 == await anext(rx_stream)
+
+    await tx.send(3)
+    assert 3 == await anext(rx_stream)
+
+    # If the sender outpaces the receiver, the receiver will only receive the latest
+    for i in range(3, 10):
+        await tx.send(i)
+
+    assert 9 == await anext(rx_stream)
+
+    # Drop the sender, should cause a stop iteration error on the stream
+    del tx
+    with pytest.raises(StopAsyncIteration):
+        await anext(rx_stream)
+
