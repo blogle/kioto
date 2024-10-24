@@ -304,6 +304,7 @@ async def test_watch_channel_borrow_and_update():
 @pytest.mark.asyncio
 async def test_watch_channel_changed():
     tx, rx = watch(1)
+    assert 1 == rx.borrow_and_update()
 
     tx.send(2)
     await rx.changed()
@@ -312,6 +313,27 @@ async def test_watch_channel_changed():
     tx.send(3)
     await rx.changed()
     assert 3 == rx.borrow_and_update()
+
+@pytest.mark.asyncio
+async def test_watch_channel_multi_consumer():
+    tx, rx1 = watch(1)
+    rx2 = tx.subscribe()
+
+    a = rx1.borrow_and_update()
+    b = rx2.borrow_and_update()
+
+    assert 1 == a == b
+
+    tx.send(2)
+    a = rx1.borrow_and_update()
+    assert 2 == a
+
+    tx.send(3)
+    a = rx1.borrow_and_update()
+    b = rx2.borrow_and_update()
+
+    assert 3 == a == b
+
 
 @pytest.mark.asyncio
 async def test_watch_channel_receiver_stream():
