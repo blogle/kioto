@@ -15,23 +15,10 @@ def channel_unbounded() -> tuple[impl.Sender, impl.Receiver]:
     return sender, receiver
 
 def oneshot_channel():
-    channel = asyncio.Future()
-
-    class OneShotSender:
-        def __init__(self):
-            self._sent = False
-
-        def send(self, value):
-            if self._sent:
-                raise RuntimeError("Value has already been sent on channel")
-
-            channel.set_result(value)
-            self._sent = True
-
-    async def receiver():
-        return await channel
-
-    return OneShotSender(), receiver()
+    channel = impl.OneShotChannel()
+    sender = impl.OneShotSender(channel)
+    receiver = impl.OneShotReceiver(channel)
+    return sender, receiver()
 
 def watch(initial_value: Any) -> tuple[impl.WatchSender, impl.WatchReceiver]:
     channel = impl.WatchChannel(initial_value)

@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 
-from kioto import streams
+from kioto import streams, futures
 from kioto.channels import channel, channel_unbounded, oneshot_channel, watch
 
 @pytest.mark.asyncio
@@ -203,6 +203,16 @@ async def test_oneshot_channel_recv_exhausted():
     with pytest.raises(RuntimeError):
         await rx
 
+
+@pytest.mark.asyncio
+async def test_oneshot_channel_sender_dropped():
+    tx, rx = oneshot_channel()
+    del tx
+
+    with pytest.raises(RuntimeError):
+        result = await rx
+
+
 @pytest.mark.asyncio
 async def test_channel_req_resp():
 
@@ -232,21 +242,19 @@ async def test_channel_req_resp():
     worker.cancel()
 
 
-@pytest.mark.asyncio
-async def test_watch_channel_send_recv():
+def test_watch_channel_send_recv():
     tx, rx = watch(1)
 
-    await tx.send(2)
-    await tx.send(3)
+    tx.send(2)
+    tx.send(3)
 
     assert 3 == rx.borrow()
 
-@pytest.mark.asyncio
-async def test_watch_channel_send_modify():
+def test_watch_channel_send_modify():
     tx, rx = watch(1)
 
-    await tx.send_modify(lambda x: x + 1)
-    await tx.send_modify(lambda x: x * 2)
+    tx.send_modify(lambda x: x + 1)
+    tx.send_modify(lambda x: x * 2)
 
     assert 4 == rx.borrow()
 
@@ -258,7 +266,7 @@ async def test_watch_channel_send_if_modified():
     version = rx._last_version
 
     # Send a modified value if the condition is met
-    await tx.send_if_modified(lambda x: x + 1)
+    tx.send_if_modified(lambda x: x + 1)
 
     # Borrow and update the value from the receiver
     value = rx.borrow_and_update()
@@ -269,7 +277,7 @@ async def test_watch_channel_send_if_modified():
     assert new_version != version
 
     # Attempt to send a value that does not modify the current value
-    await tx.send_if_modified(lambda x: x)
+    tx.send_if_modified(lambda x: x)
 
     # Ensure the version has not changed and the value remains the same
     assert rx._last_version == new_version
@@ -281,29 +289,76 @@ async def test_watch_channel_no_receivers():
     del rx
 
     with pytest.raises(RuntimeError, match="No receivers exist. Cannot send."):
-        await tx.send(2)
+        tx.send(2)
 
 @pytest.mark.asyncio
 async def test_watch_channel_borrow_and_update():
     tx, rx = watch(1)
 
-    await tx.send(2)
+    tx.send(2)
     assert 2 == rx.borrow_and_update()
 
-    await tx.send(3)
+    tx.send(3)
     assert 3 == rx.borrow_and_update()
 
 @pytest.mark.asyncio
 async def test_watch_channel_changed():
     tx, rx = watch(1)
+    assert 1 == rx.borrow_and_update()
 
-    await tx.send(2)
+    tx.send(2)
     await rx.changed()
     assert 2 == rx.borrow_and_update()
 
-    await tx.send(3)
+    tx.send(3)
     await rx.changed()
     assert 3 == rx.borrow_and_update()
+
+@pytest.mark.asyncio
+async def test_watch_channel_multi_consumer():
+    tx, rx1 = watch(1)
+    rx2 = tx.subscribe()
+
+    a = rx1.borrow_and_update()
+    b = rx2.borrow_and_update()
+
+    assert 1 == a == b
+
+    tx.send(2)
+    a = rx1.borrow_and_update()
+    assert 2 == a
+
+    tx.send(3)
+    a = rx1.borrow_and_update()
+    b = rx2.borrow_and_update()
+
+    assert 3 == a == b
+
+
+@pytest.mark.asyncio
+async def test_watch_channel_wait():
+    tx, rx1 = watch(1)
+    rx2 = tx.subscribe()
+
+    async def wait_for_update(rx):
+        await rx.changed()
+        return rx.borrow_and_update()
+
+    tasks = futures.task_set(
+        a=futures.ready(None),
+        # Start up 2 receivers both waiting for notification of a new value
+        b=wait_for_update(rx1),
+        c=wait_for_update(rx2)
+    )
+
+    # Send a value on the watch, both receivers should see the same value
+    while tasks:
+
+        match await futures.select(tasks):
+            case ("a", _):
+                tx.send(2)
+            case (_, value):
+                assert value == 2
 
 @pytest.mark.asyncio
 async def test_watch_channel_receiver_stream():
@@ -313,15 +368,15 @@ async def test_watch_channel_receiver_stream():
     # Receiver will see all items if the calls are interleaved
     assert 1 == await anext(rx_stream)
 
-    await tx.send(2)
+    tx.send(2)
     assert 2 == await anext(rx_stream)
 
-    await tx.send(3)
+    tx.send(3)
     assert 3 == await anext(rx_stream)
 
     # If the sender outpaces the receiver, the receiver will only receive the latest
     for i in range(3, 10):
-        await tx.send(i)
+        tx.send(i)
 
     assert 9 == await anext(rx_stream)
 
