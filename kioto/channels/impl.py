@@ -259,16 +259,16 @@ class WatchChannel:
 
     async def wait(self):
         # Create a oneshot channel
-        channel = impl.OneShotChannel()
-        sender = impl.OneShotSender(channel)
-        receiver = impl.OneShotReceiver(channel)
+        channel = OneShotChannel()
+        sender = OneShotSender(channel)
+        receiver = OneShotReceiver(channel)
 
         # Register the sender
         self._waiters.append(sender)
 
         # wait for notification
         try:
-            await receiver
+            await receiver()
         finally:
             self._waiters.remove(sender)
 

@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 
-from kioto import streams
+from kioto import streams, futures
 from kioto.channels import channel, channel_unbounded, oneshot_channel, watch
 
 @pytest.mark.asyncio
@@ -334,6 +334,31 @@ async def test_watch_channel_multi_consumer():
 
     assert 3 == a == b
 
+
+@pytest.mark.asyncio
+async def test_watch_channel_wait():
+    tx, rx1 = watch(1)
+    rx2 = tx.subscribe()
+
+    async def wait_for_update(rx):
+        await rx.changed()
+        return rx.borrow_and_update()
+
+    tasks = futures.task_set(
+        a=futures.ready(None),
+        # Start up 2 receivers both waiting for notification of a new value
+        b=wait_for_update(rx1),
+        c=wait_for_update(rx2)
+    )
+
+    # Send a value on the watch, both receivers should see the same value
+    while tasks:
+
+        match await futures.select(tasks):
+            case ("a", _):
+                tx.send(2)
+            case (_, value):
+                assert value == 2
 
 @pytest.mark.asyncio
 async def test_watch_channel_receiver_stream():
