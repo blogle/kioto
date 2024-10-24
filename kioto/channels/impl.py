@@ -1,5 +1,7 @@
 import asyncio
+import threading
 import weakref
+
 from collections import deque
 from typing import Any, Callable
 
@@ -176,13 +178,45 @@ class ReceiverStream(Stream):
         except Exception:
             raise StopAsyncIteration
 
+class OneShotChannel(asyncio.Future):
+
+    def sender_dropped(self):
+        if not self.done():
+            exception = RuntimeError("Sender was dropped")
+            self.set_exception(exception)
+
+class OneShotSender:
+
+    def __init__(self, channel):
+        self._channel = channel
+        weakref.finalize(self, channel.sender_dropped)
+
+    def send(self, value):
+        if self._channel.done():
+            raise RuntimeError("Value has already been sent on channel")
+
+        self._channel.set_result(value)
+
+class OneShotReceiver:
+    def __init__(self, channel):
+        self._channel = channel
+
+    async def __call__(self):
+        return await self._channel
+
+
 class WatchChannel:
 
     def __init__(self, initial_value: Any):
+        # Tracks the version of the current value
+        self._version = 0
+
         # Deque with maxlen=1 to store the current value
         self._queue = deque([initial_value], maxlen=1)
-        self._version = 0  # Tracks the version of the current value
-        self._condition = asyncio.Condition()  # Synchronization primitive
+
+        self._lock = threading.Lock()
+        self._waiters = deque()
+
         self._senders = weakref.WeakSet()
         self._receivers = weakref.WeakSet()
 
@@ -216,12 +250,37 @@ class WatchChannel:
         """
         return self._queue[0]
 
+    def notify(self):
+        """
+        Notify all receivers that a new value is available
+        """
+        for tx in self._waiters:
+            tx.send(())
+
+    async def wait(self):
+        # Create a oneshot channel
+        channel = impl.OneShotChannel()
+        sender = impl.OneShotSender(channel)
+        receiver = impl.OneShotReceiver(channel)
+
+        # Register the sender
+        self._waiters.append(sender)
+
+        # wait for notification
+        try:
+            await receiver
+        finally:
+            self._waiters.remove(sender)
+
+
     def set_value(self, value: Any):
         """
         Set a new value in the channel and increment the version.
         """
-        self._queue.append(value)
-        self._version += 1
+        with self._lock:
+            self._queue.append(value)
+            self._version += 1
+            self.notify()
 
 
 class WatchSender:
@@ -244,7 +303,7 @@ class WatchSender:
         """
         return len(self._channel._receivers)
 
-    async def send(self, value: Any):
+    def send(self, value: Any):
         """
         Asynchronously send a new value to the channel.
 
@@ -256,11 +315,10 @@ class WatchSender:
         """
         if not self._channel.has_receivers():
             raise RuntimeError("No receivers exist. Cannot send.")
-        async with self._channel._condition:
-            self._channel.set_value(value)
-            self._channel._condition.notify_all()  # Notify all waiting receivers
 
-    async def send_modify(self, func: Callable[[Any], Any]):
+        self._channel.set_value(value)
+
+    def send_modify(self, func: Callable[[Any], Any]):
         """
         Modify the current value using a provided function and send the updated value.
 
@@ -272,13 +330,12 @@ class WatchSender:
         """
         if not self._channel.has_receivers():
             raise RuntimeError("No receivers exist. Cannot send.")
-        async with self._channel._condition:
-            current = self._channel.get_current_value()
-            new_value = func(current)
-            self._channel.set_value(new_value)
-            self._channel._condition.notify_all()
 
-    async def send_if_modified(self, func: Callable[[Any], Any]):
+        current = self._channel.get_current_value()
+        new_value = func(current)
+        self._channel.set_value(new_value)
+
+    def send_if_modified(self, func: Callable[[Any], Any]):
         """
         Modify the current value using a provided function and send the updated value only if it has changed.
 
@@ -290,12 +347,11 @@ class WatchSender:
         """
         if not self._channel.has_receivers():
             raise RuntimeError("No receivers exist. Cannot send.")
-        async with self._channel._condition:
-            current = self._channel.get_current_value()
-            new_value = func(current)
-            if new_value != current:
-                self._channel.set_value(new_value)
-                self._channel._condition.notify_all()
+
+        current = self._channel.get_current_value()
+        new_value = func(current)
+        if new_value != current:
+            self._channel.set_value(new_value)
 
     def borrow(self) -> Any:
         """
@@ -342,20 +398,21 @@ class WatchReceiver:
         Raises:
             RuntimeError: If the sender has been closed and no new values are available.
         """
-        async with self._channel._condition:
-            if self._channel._version > self._last_version:
-                # New value already available
-                self._last_version = self._channel._version
-                return
-            while self._channel.has_senders() and self._channel._version <= self._last_version:
-                await self._channel._condition.wait()
-            if self._channel._version > self._last_version:
-                # New value received
-                self._last_version = self._channel._version
-                return
-            else:
-                # Sender has been closed and no new values
-                raise RuntimeError("Sender has been closed and no new values are available.")
+        while True:
+            with self._channel._lock:
+
+                if self._channel._version > self._last_version:
+                    # New value already available
+                    self._last_version = self._channel._version
+                    return
+
+                if not self._channel.has_senders():
+                    # Sender has been closed and no new values
+                    raise RuntimeError("Sender has been closed and no new values are available.")
+
+            # Note: We release the lock before waiting for notification. Otherwise we would deadlock
+            # as senders would not be able to gain access to the underlying channel.
+            await self._channel.wait()
 
     def into_stream(self) -> 'WatchReceiverStream':
         """
