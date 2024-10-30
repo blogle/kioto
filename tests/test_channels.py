@@ -66,6 +66,19 @@ async def test_channel_drop_sender():
         await rx.recv()
 
 @pytest.mark.asyncio
+async def test_channel_drop_sender_parked_receiver():
+    tx, rx = channel(1)
+
+    rx_task = asyncio.create_task(rx.recv())
+
+    await asyncio.sleep(0.1)
+    del tx
+
+    with pytest.raises(RuntimeError):
+        await rx_task
+
+
+@pytest.mark.asyncio
 async def test_channel_drop_recv():
     tx, rx = channel(1)
 
