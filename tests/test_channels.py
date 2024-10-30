@@ -356,9 +356,12 @@ async def test_watch_channel_wait():
 
         match await futures.select(tasks):
             case ("a", _):
+                # There was a bug that broke notification if we sent
+                # two values while the receiver was waiting
                 tx.send(2)
+                tx.send(3)
             case (_, value):
-                assert value == 2
+                assert value == 3
 
 @pytest.mark.asyncio
 async def test_watch_channel_receiver_stream():

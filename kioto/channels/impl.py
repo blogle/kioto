@@ -254,7 +254,8 @@ class WatchChannel:
         """
         Notify all receivers that a new value is available
         """
-        for tx in self._waiters:
+        while self._waiters:
+            tx = self._waiters.pop()
             tx.send(())
 
     async def wait(self):
@@ -267,10 +268,7 @@ class WatchChannel:
         self._waiters.append(sender)
 
         # wait for notification
-        try:
-            await receiver()
-        finally:
-            self._waiters.remove(sender)
+        await receiver()
 
 
     def set_value(self, value: Any):
