@@ -86,6 +86,33 @@ async def test_channel_send_then_drop_sender_parked_receiver():
     assert 1 == await rx_task
 
 @pytest.mark.asyncio
+async def test_channel_send_park_on_full_recv_unpark():
+    tx, rx = channel(1)
+
+    async def park_sender():
+        await tx.send_async(1)
+        await tx.send_async(2)
+
+    send_task = asyncio.create_task(park_sender())
+    assert 1 == await rx.recv()
+    assert 2 == await rx.recv()
+    await send_task
+
+@pytest.mark.asyncio
+async def test_channel_recv_park_on_empty_send_unpark():
+    tx, rx = channel(1)
+
+    async def park_receiver():
+        assert 1 == await rx.recv()
+        assert 2 == await rx.recv()
+
+    recv_task = asyncio.create_task(park_receiver())
+    await tx.send_async(1)
+    await tx.send_async(2)
+    await recv_task
+
+
+@pytest.mark.asyncio
 async def test_channel_drop_recv():
     tx, rx = channel(1)
 

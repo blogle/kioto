@@ -48,7 +48,7 @@ class Channel:
 
     def size(self):
         return len(self.sync_queue)
-    
+
     def empty(self):
         return self.size() == 0
 
@@ -125,7 +125,7 @@ class Sender:
                 return
 
             # TODO: wait for receiver notification
-            await self._wait_for_capacity()
+            await self._channel.wait_for_receiver()
 
     def send(self, item: Any):
         """
@@ -185,7 +185,7 @@ class Receiver:
         while True:
             if not self._channel.empty():
                 item = self._channel.sync_queue.popleft()
-                self._channel.notify_receiver()
+                self._channel.notify_sender()
                 return item
 
             if not self._channel.has_senders():
@@ -400,7 +400,7 @@ class WatchSender:
             ReceiversDisconnected: if no receivers exist
         """
         if not self._channel.has_receivers():
-            raise error.ReceiversDisconnected 
+            raise error.ReceiversDisconnected
 
         current = self._channel.get_current_value()
         new_value = func(current)
@@ -417,7 +417,7 @@ class WatchSender:
             ReceiversDisconnected: if no receivers exist
         """
         if not self._channel.has_receivers():
-            raise error.ReceiversDisconnected 
+            raise error.ReceiversDisconnected
 
         current = self._channel.get_current_value()
         new_value = func(current)
