@@ -248,7 +248,7 @@ class ReceiverStream(Stream):
     async def __anext__(self):
         try:
             return await self._receiver.recv()
-        except Exception:
+        except error.SendersDisconnected:
             raise StopAsyncIteration
 
 class OneShotChannel(asyncio.Future):
