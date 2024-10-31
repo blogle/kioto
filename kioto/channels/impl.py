@@ -227,17 +227,14 @@ class SenderSink(Sink):
         if self._closed:
             raise error.SenderSinkClosed
         await self._sender.send_async(item)
-        await self.flush()
 
     async def flush(self):
         if self._closed:
             raise error.SenderSinkClosed
-        #await self._channel.join()
 
     async def close(self):
         if not self._closed:
             del self._sender
-            await self.flush()
             self._closed = True
 
 
