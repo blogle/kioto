@@ -5,23 +5,68 @@ import weakref
 from collections import deque
 from typing import Any, Callable
 
+from kioto.futures import task_set, select, ready
 from kioto.streams import Stream
 from kioto.sink import Sink
+
+from . import error
+
+def notify_one(waiters):
+    if waiters:
+        tx = waiters.pop()
+        tx.send(())
+
+def notify_all(waiters):
+    while waiters:
+        tx = waiters.pop()
+        if not tx._channel.done():
+            tx.send(())
+
+def wait_for_notice(waiters):
+    # Create a oneshot channel
+    channel = OneShotChannel()
+    sender = OneShotSender(channel)
+    receiver = OneShotReceiver(channel)
+
+    # register the tx side for notification
+    waiters.append(sender)
+
+    return receiver()
 
 class Channel:
     """
     Internal Channel class managing the asyncio.Queue and tracking senders and receivers.
     """
-    def __init__(self, maxsize: int):
-        self.sync_queue = asyncio.Queue(maxsize=maxsize)
-        self._senders = weakref.WeakSet()
-        self._receivers = weakref.WeakSet()
+    def __init__(self, maxsize: int | None):
+        self.sync_queue = deque([], maxlen=maxsize)
+        self._senders = set()
+        self._receivers = set()
+
+        self._lock = threading.Lock()
+        self._recv_waiters = deque([])
+        self._send_waiters = deque([])
+
+    def size(self):
+        return len(self.sync_queue)
+    
+    def empty(self):
+        return self.size() == 0
+
+    def capacity(self):
+        return self.sync_queue.maxlen or float('inf')
+
+    def full(self):
+        return self.size() == self.capacity()
 
     def register_sender(self, sender: 'Sender'):
-        self._senders.add(sender)
+        self._senders.add(
+            weakref.ref(sender, self.sender_dropped)
+        )
 
     def register_receiver(self, receiver: 'Receiver'):
-        self._receivers.add(receiver)
+        self._receivers.add(
+            weakref.ref(receiver, self.receiver_dropped)
+        )
 
     def has_receivers(self) -> bool:
         return len(self._receivers) > 0
@@ -29,8 +74,27 @@ class Channel:
     def has_senders(self) -> bool:
         return len(self._senders) > 0
 
-    def empty(self):
-        return self.sync_queue.empty()
+    def sender_dropped(self, sender):
+        self._senders.discard(sender)
+        if not self.has_senders():
+            notify_all(self._recv_waiters)
+
+    def receiver_dropped(self, receiver):
+        self._receivers.discard(receiver)
+        if not self.has_receivers():
+            notify_all(self._send_waiters)
+
+    async def wait_for_receiver(self):
+        await wait_for_notice(self._send_waiters)
+
+    async def wait_for_sender(self):
+        await wait_for_notice(self._recv_waiters)
+
+    def notify_sender(self):
+        notify_one(self._send_waiters)
+
+    def notify_receiver(self):
+        notify_one(self._recv_waiters)
 
 
 class Sender:
@@ -49,11 +113,19 @@ class Sender:
             item (Any): The item to send.
 
         Raises:
-            RuntimeError: If no receivers exist or the channel is closed.
+            ReceiversDisconnected: If no receivers exist or the channel is closed.
         """
-        if not self._channel.has_receivers():
-            raise RuntimeError("No receivers exist. Cannot send.")
-        await self._channel.sync_queue.put(item)
+        while True:
+            if not self._channel.has_receivers():
+                raise error.ReceiversDisconnected
+
+            if not self._channel.full():
+                self._channel.sync_queue.append(item)
+                self._channel.notify_receiver()
+                return
+
+            # TODO: wait for receiver notification
+            await self._wait_for_capacity()
 
     def send(self, item: Any):
         """
@@ -63,12 +135,17 @@ class Sender:
             item (Any): The item to send.
 
         Raises:
-            RuntimeError: If no receivers exist or the channel is closed.
-            asyncio.QueueFull: If the channel is bounded and full.
+            ReceiversDisconnected: If no receivers exist or the channel is closed.
+            ChannelFull: If the channel is bounded and full.
         """
         if not self._channel.has_receivers():
-            raise RuntimeError("No receivers exist. Cannot send.")
-        self._channel.sync_queue.put_nowait(item)
+            raise error.ReceiversDisconnected
+
+        if self._channel.full():
+            raise error.ChannelFull
+
+        self._channel.sync_queue.append(item)
+        self._channel.notify_receiver()
 
     def into_sink(self) -> 'SenderSink':
         """
@@ -102,20 +179,19 @@ class Receiver:
             Any: The received item.
 
         Raises:
-            RuntimeError: If no senders exist and the queue is empty.
+            SendersDisconnected: If no senders exist and the queue is empty.
         """
 
-        # If there is data in the queue, then we can immediately read it
-        if not self._channel.empty():
-            self._channel.sync_queue.task_done()
-            return self._channel.sync_queue.get_nowait()
+        while True:
+            if not self._channel.empty():
+                item = self._channel.sync_queue.popleft()
+                self._channel.notify_receiver()
+                return item
 
-        if not self._channel.has_senders():
-            raise RuntimeError("No senders exist. Cannot receive.")
+            if not self._channel.has_senders():
+                raise error.SendersDisconnected
 
-        item = await self._channel.sync_queue.get()
-        self._channel.sync_queue.task_done()
-        return item
+            await self._channel.wait_for_sender()
 
     def into_stream(self) -> 'ReceiverStream':
         """
@@ -144,19 +220,19 @@ class SenderSink(Sink):
 
     async def feed(self, item: Any):
         if self._closed:
-            raise RuntimeError("Cannot feed to a closed Sink.")
+            raise error.SenderSinkClosed
         await self._sender.send_async(item)
 
     async def send(self, item: Any):
         if self._closed:
-            raise RuntimeError("Cannot send to a closed Sink.")
+            raise error.SenderSinkClosed
         await self._sender.send_async(item)
         await self.flush()
 
     async def flush(self):
         if self._closed:
-            raise RuntimeError("Cannot flush a closed Sink.")
-        await self._channel.sync_queue.join()
+            raise error.SenderSinkClosed
+        #await self._channel.join()
 
     async def close(self):
         if not self._closed:
@@ -182,7 +258,7 @@ class OneShotChannel(asyncio.Future):
 
     def sender_dropped(self):
         if not self.done():
-            exception = RuntimeError("Sender was dropped")
+            exception = error.SendersDisconnected
             self.set_exception(exception)
 
 class OneShotSender:
@@ -193,7 +269,7 @@ class OneShotSender:
 
     def send(self, value):
         if self._channel.done():
-            raise RuntimeError("Value has already been sent on channel")
+            raise error.SenderExhausted("Value has already been sent on channel")
 
         self._channel.set_result(value)
 
@@ -309,10 +385,10 @@ class WatchSender:
             value (Any): The value to send.
 
         Raises:
-            RuntimeError: If the sender is closed or no receivers exist.
+            ReceiversDisconnected: if no receivers exist
         """
         if not self._channel.has_receivers():
-            raise RuntimeError("No receivers exist. Cannot send.")
+            raise error.ReceiversDisconnected
 
         self._channel.set_value(value)
 
@@ -324,10 +400,10 @@ class WatchSender:
             func (Callable[[Any], Any]): Function to modify the current value.
 
         Raises:
-            RuntimeError: If the sender is closed or no receivers exist.
+            ReceiversDisconnected: if no receivers exist
         """
         if not self._channel.has_receivers():
-            raise RuntimeError("No receivers exist. Cannot send.")
+            raise error.ReceiversDisconnected 
 
         current = self._channel.get_current_value()
         new_value = func(current)
@@ -341,10 +417,10 @@ class WatchSender:
             func (Callable[[Any], Any]): Function to modify the current value.
 
         Raises:
-            RuntimeError: If the sender is closed or no receivers exist.
+            ReceiversDisconnected: if no receivers exist
         """
         if not self._channel.has_receivers():
-            raise RuntimeError("No receivers exist. Cannot send.")
+            raise error.ReceiversDisconnected 
 
         current = self._channel.get_current_value()
         new_value = func(current)
@@ -394,7 +470,7 @@ class WatchReceiver:
         Wait for the channel to have a new value that hasn't been seen yet.
 
         Raises:
-            RuntimeError: If the sender has been closed and no new values are available.
+            SendersDisconnected: If no senders exist
         """
         while True:
             with self._channel._lock:
@@ -406,7 +482,7 @@ class WatchReceiver:
 
                 if not self._channel.has_senders():
                     # Sender has been closed and no new values
-                    raise RuntimeError("Sender has been closed and no new values are available.")
+                    raise error.SendersDisconnected
 
             # Note: We release the lock before waiting for notification. Otherwise we would deadlock
             # as senders would not be able to gain access to the underlying channel.
@@ -430,7 +506,7 @@ async def _watch_stream(receiver):
         try:
             await receiver.changed()
             yield receiver.borrow_and_update()
-        except RuntimeError as e:
+        except error.SendersDisconnected as e:
             break
 
 

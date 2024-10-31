@@ -91,6 +91,9 @@ strict = true
 testpaths = ["tests"]
 pythonpath = "."
 
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+
 # Enable coverage reporting within pytest
 addopts = "--cov=kioto --cov-report=term-missing --cov-report=html"
 

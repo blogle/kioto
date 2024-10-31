@@ -9,7 +9,7 @@ def channel(capacity: int) -> tuple[impl.Sender, impl.Receiver]:
     return sender, receiver
 
 def channel_unbounded() -> tuple[impl.Sender, impl.Receiver]:
-    channel = impl.Channel(0)
+    channel = impl.Channel(None)
     sender = impl.Sender(channel)
     receiver = impl.Receiver(channel)
     return sender, receiver
