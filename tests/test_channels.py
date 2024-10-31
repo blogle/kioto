@@ -2,7 +2,7 @@ import asyncio
 import pytest
 
 from kioto import streams, futures
-from kioto.channels import channel, channel_unbounded, oneshot_channel, watch
+from kioto.channels import error, channel, channel_unbounded, oneshot_channel, watch
 
 @pytest.mark.asyncio
 async def test_channel_send_recv_unbounded():
@@ -23,7 +23,7 @@ async def test_channel_bounded_send_recv():
     tx.send(2)
     tx.send(3)
 
-    with pytest.raises(asyncio.QueueFull):
+    with pytest.raises(error.ChannelFull):
         tx.send(4)
 
     x = await rx.recv()
@@ -62,8 +62,55 @@ async def test_channel_drop_sender():
     assert 1 == result
 
     # Sender was dropped no more data will ever be received
-    with pytest.raises(RuntimeError):
+    with pytest.raises(error.SendersDisconnected):
         await rx.recv()
+
+@pytest.mark.asyncio
+async def test_channel_drop_sender_parked_receiver():
+    tx, rx = channel(1)
+
+    rx_task = asyncio.create_task(rx.recv())
+    del tx
+
+    with pytest.raises(error.SendersDisconnected):
+        await rx_task
+
+@pytest.mark.asyncio
+async def test_channel_send_then_drop_sender_parked_receiver():
+    tx, rx = channel(1)
+
+    rx_task = asyncio.create_task(rx.recv())
+    tx.send(1)
+    del tx
+
+    assert 1 == await rx_task
+
+@pytest.mark.asyncio
+async def test_channel_send_park_on_full_recv_unpark():
+    tx, rx = channel(1)
+
+    async def park_sender():
+        await tx.send_async(1)
+        await tx.send_async(2)
+
+    send_task = asyncio.create_task(park_sender())
+    assert 1 == await rx.recv()
+    assert 2 == await rx.recv()
+    await send_task
+
+@pytest.mark.asyncio
+async def test_channel_recv_park_on_empty_send_unpark():
+    tx, rx = channel(1)
+
+    async def park_receiver():
+        assert 1 == await rx.recv()
+        assert 2 == await rx.recv()
+
+    recv_task = asyncio.create_task(park_receiver())
+    await tx.send_async(1)
+    await tx.send_async(2)
+    await recv_task
+
 
 @pytest.mark.asyncio
 async def test_channel_drop_recv():
@@ -72,7 +119,7 @@ async def test_channel_drop_recv():
     del rx
 
     # No receivers exist to receive the sent data
-    with pytest.raises(RuntimeError):
+    with pytest.raises(error.ReceiversDisconnected):
         tx.send(1)
 
 @pytest.mark.asyncio
@@ -80,7 +127,7 @@ async def test_channel_send_on_closed():
     tx, rx = channel(1)
 
     del rx
-    with pytest.raises(RuntimeError):
+    with pytest.raises(error.ReceiversDisconnected):
         tx.send(1)
 
 @pytest.mark.asyncio
@@ -88,7 +135,7 @@ async def test_channel_recv_on_closed():
     tx, rx = channel(1)
 
     del tx
-    with pytest.raises(RuntimeError):
+    with pytest.raises(error.SendersDisconnected):
         await rx.recv()
 
 
@@ -189,7 +236,7 @@ async def test_oneshot_channel_send_exhausted():
     result = await rx
 
     # You can only send on the channel once!
-    with pytest.raises(RuntimeError):
+    with pytest.raises(error.SenderExhausted):
         tx.send(2)
 
 @pytest.mark.asyncio
@@ -209,7 +256,7 @@ async def test_oneshot_channel_sender_dropped():
     tx, rx = oneshot_channel()
     del tx
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(error.SendersDisconnected):
         result = await rx
 
 
@@ -288,7 +335,7 @@ async def test_watch_channel_no_receivers():
     tx, rx = watch(1)
     del rx
 
-    with pytest.raises(RuntimeError, match="No receivers exist. Cannot send."):
+    with pytest.raises(error.ReceiversDisconnected):
         tx.send(2)
 
 @pytest.mark.asyncio
