@@ -2,8 +2,8 @@ name: autofix
 on:
   workflow_call:
     pull_request:
-      push:
-        branches: ["master"]
+    push:
+      branches: ["master"]
 
 permissions:
   contents: read
