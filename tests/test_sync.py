@@ -3,9 +3,11 @@ import pytest
 
 from kioto.sync import Mutex
 
+
 class State:
     def __init__(self):
         self.count = 0
+
 
 @pytest.mark.asyncio
 async def test_mutex():
@@ -20,12 +22,13 @@ async def test_mutex():
     with pytest.raises(ReferenceError):
         guard.count = 3
 
+
 @pytest.mark.asyncio
 async def test_mutex_leak():
     mutex = Mutex(State)
 
     async def invalid(guard):
-        await asyncio.sleep(.1)
+        await asyncio.sleep(0.1)
         # The guard is invalid and should raise an error
         guard.count = 2
 
@@ -34,6 +37,7 @@ async def test_mutex_leak():
 
     with pytest.raises(ReferenceError):
         await task
+
 
 @pytest.mark.asyncio
 async def test_mutex_poison():
@@ -50,6 +54,7 @@ async def test_mutex_poison():
     with pytest.raises(RuntimeError):
         async with mutex.lock() as guard:
             pass
+
 
 @pytest.mark.asyncio
 async def test_mutex_copy():

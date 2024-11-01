@@ -9,6 +9,7 @@ requires-python = ">=3.8"
 # Runtime Dependencies
 dependencies = [
     "aiofiles==24.1.0",
+    "ruff>=0.7.1",
 ]
 
 # Developer Dependencies

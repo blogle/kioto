@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import weakref
 
+
 class Guard:
     def __init__(self, state):
         object.__setattr__(self, "_Guard__state", state)
@@ -24,7 +25,7 @@ async def mutex_state_manager(mutex):
     guard = Guard(state)
     try:
         yield weakref.proxy(guard)
-    except Exception as e:
+    except Exception:
         mutex._poisoned = True
     finally:
         del guard
@@ -47,4 +48,3 @@ class Mutex:
 
     def __deepcopy__(self, memo):
         raise TypeError("Mutex instances cannot be deep copied.")
-

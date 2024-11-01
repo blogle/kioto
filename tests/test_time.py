@@ -2,11 +2,22 @@ import asyncio
 import pytest
 import time
 
-from kioto.time import instant, interval, interval_at, sleep_until, timeout, timeout_at, MissedTickBehavior
+from kioto.time import (
+    instant,
+    interval,
+    interval_at,
+    sleep_until,
+    timeout,
+    timeout_at,
+    MissedTickBehavior,
+)
 
 TOL = 5e-3
+
+
 def approx(a):
     return pytest.approx(a, abs=TOL)
+
 
 @pytest.mark.xfail(reason="known issue with the initial interval")
 @pytest.mark.asyncio
@@ -18,6 +29,7 @@ async def test_interval():
     now = instant()
     await timer.tick()
     assert now.elapsed() == approx(duration)
+
 
 @pytest.mark.asyncio
 async def test_interval_at_w_burst():
@@ -38,9 +50,10 @@ async def test_interval_at_w_burst():
     await timer.tick()
     assert now.elapsed() == approx(duration)
 
+
 @pytest.mark.asyncio
 async def test_interval_at_w_delay():
-    duration = .1
+    duration = 0.1
 
     # Simulate a delay of 1 second
     start = time.monotonic()
@@ -58,9 +71,10 @@ async def test_interval_at_w_delay():
         await timer.tick()
         assert now.elapsed() == approx(duration)
 
+
 @pytest.mark.asyncio
 async def test_interval_at_w_skip():
-    duration = .1
+    duration = 0.1
 
     # Simulate a delay of 1 second
     past = time.monotonic() - 1
@@ -77,6 +91,7 @@ async def test_interval_at_w_skip():
         await timer.tick()
         assert (time.monotonic() - past) % duration == approx(0.0)
 
+
 @pytest.mark.asyncio
 async def test_sleep_at():
     start = time.monotonic()
@@ -85,6 +100,7 @@ async def test_sleep_at():
     now = instant()
     await sleep_until(start + duration)
     assert now.elapsed() == approx(duration)
+
 
 @pytest.mark.asyncio
 async def test_timeout():

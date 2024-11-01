@@ -4,7 +4,8 @@ import pytest
 from typing import Any
 
 from kioto import streams
-from kioto.sink import Sink, drain
+from kioto.sink import Sink
+
 
 # Define a MockSink for testing purposes
 class MockSink(Sink):
@@ -25,6 +26,7 @@ class MockSink(Sink):
 
     async def close(self):
         self.closed = True
+
 
 @pytest.mark.asyncio
 async def test_with_map():
@@ -47,6 +49,7 @@ async def test_with_map():
     assert mock_sink.received_send == ["SINK"]
     assert mock_sink.flushed is True
     assert mock_sink.closed is True
+
 
 @pytest.mark.asyncio
 async def test_buffer():
@@ -76,6 +79,7 @@ async def test_buffer():
     assert mock_sink.flushed is True
     assert mock_sink.closed is True
 
+
 @pytest.mark.asyncio
 async def test_fanout():
     mock_sink1 = MockSink()
@@ -103,6 +107,7 @@ async def test_fanout():
     assert mock_sink2.flushed is True
     assert mock_sink2.closed is True
 
+
 @pytest.mark.asyncio
 async def test_send_all():
     mock_sink = MockSink()
@@ -125,6 +130,7 @@ async def test_send_all():
     assert mock_sink.flushed is True
     assert mock_sink.closed is True
 
+
 @pytest.mark.asyncio
 async def test_buffer_with_stream():
     mock_sink = MockSink()
@@ -134,7 +140,7 @@ async def test_buffer_with_stream():
     buffer_sink = mock_sink.buffer(capacity=buffer_capacity)
 
     # Create a stream with multiple items
-    test_stream = streams.iter(['a', 'b', 'c', 'd', 'e'])
+    test_stream = streams.iter(["a", "b", "c", "d", "e"])
 
     # Use send_all to send all items from the stream
     await buffer_sink.send_all(test_stream)
@@ -143,9 +149,10 @@ async def test_buffer_with_stream():
     await buffer_sink.close()
 
     # Assertions
-    assert mock_sink.received_feed == ['a', 'b', 'c', 'd', 'e']
+    assert mock_sink.received_feed == ["a", "b", "c", "d", "e"]
     assert mock_sink.flushed is True
     assert mock_sink.closed is True
+
 
 @pytest.mark.asyncio
 async def test_fanout_with_multiple_sinks():
@@ -157,7 +164,7 @@ async def test_fanout_with_multiple_sinks():
     fanout_sink = mock_sink1.fanout(mock_sink2).fanout(mock_sink3)
 
     # Create a stream with multiple items
-    test_stream = streams.iter(['x', 'y', 'z'])
+    test_stream = streams.iter(["x", "y", "z"])
 
     # Use send_all to send all items from the stream
     await fanout_sink.send_all(test_stream)
@@ -166,7 +173,7 @@ async def test_fanout_with_multiple_sinks():
     await fanout_sink.close()
 
     # Assertions for all sinks
-    expected = ['x', 'y', 'z']
+    expected = ["x", "y", "z"]
     for mock_sink in [mock_sink1, mock_sink2, mock_sink3]:
         assert mock_sink.received_feed == expected
         assert mock_sink.flushed is True

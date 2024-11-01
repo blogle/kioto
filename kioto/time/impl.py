@@ -3,6 +3,7 @@ import time
 
 from enum import Enum
 
+
 class Instant:
     def __init__(self):
         self.start = time.monotonic()
@@ -13,14 +14,20 @@ class Instant:
     def restart(self):
         self.start = time.monotonic()
 
+
 class MissedTickBehavior(Enum):
     Burst = 0
     Delay = 1
     Skip = 2
 
-class Interval:
 
-    def __init__(self, period, start=time.monotonic(), missed_tick_behavior=MissedTickBehavior.Burst):
+class Interval:
+    def __init__(
+        self,
+        period,
+        start=time.monotonic(),
+        missed_tick_behavior=MissedTickBehavior.Burst,
+    ):
         self.start = start
         self.period = period
         self.ticks = 0
@@ -65,7 +72,6 @@ class Interval:
         if now > deadline + 1e-5:
             # If the deadline has passed, we need to determine how to handle the missed tick.
             match self.missed_tick_behavior:
-
                 # If using the burst behavior, will return continue to return immediately until caught up.
                 case MissedTickBehavior.Burst:
                     return
@@ -81,5 +87,5 @@ class Interval:
                     return
 
         # If the deadline has not passed, wait until the deadline.
-        #import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         await asyncio.sleep(deadline - now)

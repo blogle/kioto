@@ -4,6 +4,7 @@ import pytest
 from kioto import streams, futures
 from kioto.channels import error, channel, channel_unbounded, oneshot_channel, watch
 
+
 @pytest.mark.asyncio
 async def test_channel_send_recv_unbounded():
     tx, rx = channel_unbounded()
@@ -15,6 +16,7 @@ async def test_channel_send_recv_unbounded():
     y = await rx.recv()
     z = await rx.recv()
     assert [1, 2, 3] == [x, y, z]
+
 
 @pytest.mark.asyncio
 async def test_channel_bounded_send_recv():
@@ -30,6 +32,7 @@ async def test_channel_bounded_send_recv():
     y = await rx.recv()
     z = await rx.recv()
     assert [1, 2, 3] == [x, y, z]
+
 
 @pytest.mark.asyncio
 async def test_channel_bounded_send_recv_async():
@@ -51,6 +54,7 @@ async def test_channel_bounded_send_recv_async():
     deferred = await rx.recv()
     assert 4 == deferred
 
+
 @pytest.mark.asyncio
 async def test_channel_drop_sender():
     tx, rx = channel(1)
@@ -65,6 +69,7 @@ async def test_channel_drop_sender():
     with pytest.raises(error.SendersDisconnected):
         await rx.recv()
 
+
 @pytest.mark.asyncio
 async def test_channel_drop_sender_parked_receiver():
     tx, rx = channel(1)
@@ -75,6 +80,7 @@ async def test_channel_drop_sender_parked_receiver():
     with pytest.raises(error.SendersDisconnected):
         await rx_task
 
+
 @pytest.mark.asyncio
 async def test_channel_send_then_drop_sender_parked_receiver():
     tx, rx = channel(1)
@@ -84,6 +90,7 @@ async def test_channel_send_then_drop_sender_parked_receiver():
     del tx
 
     assert 1 == await rx_task
+
 
 @pytest.mark.asyncio
 async def test_channel_send_park_on_full_recv_unpark():
@@ -97,6 +104,7 @@ async def test_channel_send_park_on_full_recv_unpark():
     assert 1 == await rx.recv()
     assert 2 == await rx.recv()
     await send_task
+
 
 @pytest.mark.asyncio
 async def test_channel_recv_park_on_empty_send_unpark():
@@ -122,6 +130,7 @@ async def test_channel_drop_recv():
     with pytest.raises(error.ReceiversDisconnected):
         tx.send(1)
 
+
 @pytest.mark.asyncio
 async def test_channel_send_on_closed():
     tx, rx = channel(1)
@@ -129,6 +138,7 @@ async def test_channel_send_on_closed():
     del rx
     with pytest.raises(error.ReceiversDisconnected):
         tx.send(1)
+
 
 @pytest.mark.asyncio
 async def test_channel_recv_on_closed():
@@ -152,6 +162,7 @@ async def test_channel_rx_stream():
     evens = await rx_stream.filter(lambda x: x % 2 == 0).collect()
     assert [0, 2, 4] == evens
 
+
 @pytest.mark.asyncio
 async def test_channel_tx_sink():
     tx, rx = channel(3)
@@ -170,6 +181,7 @@ async def test_channel_tx_sink():
     assert [1, 2, 3] == [x, y, z]
 
     await sink_task
+
 
 @pytest.mark.asyncio
 async def test_channel_tx_sink_feed_send():
@@ -197,9 +209,9 @@ async def test_channel_tx_sink_feed_send():
 
     assert [1, 2, 3] == [x, y, z]
 
+
 @pytest.mark.asyncio
 async def test_channel_tx_sink_close():
-
     def make_sink_rx():
         tx, rx = channel(4)
         tx_sink = tx.into_sink()
@@ -222,12 +234,14 @@ async def test_channel_tx_sink_close():
 
     await sink_task
 
+
 @pytest.mark.asyncio
 async def test_oneshot_channel():
     tx, rx = oneshot_channel()
     tx.send(1)
     result = await rx
     assert 1 == result
+
 
 @pytest.mark.asyncio
 async def test_oneshot_channel_send_exhausted():
@@ -238,6 +252,7 @@ async def test_oneshot_channel_send_exhausted():
     # You can only send on the channel once!
     with pytest.raises(error.SenderExhausted):
         tx.send(2)
+
 
 @pytest.mark.asyncio
 async def test_oneshot_channel_recv_exhausted():
@@ -262,7 +277,6 @@ async def test_oneshot_channel_sender_dropped():
 
 @pytest.mark.asyncio
 async def test_channel_req_resp():
-
     # A common pattern for using oneshot is to implement a request response interface
 
     async def worker_task(rx):
@@ -297,6 +311,7 @@ def test_watch_channel_send_recv():
 
     assert 3 == rx.borrow()
 
+
 def test_watch_channel_send_modify():
     tx, rx = watch(1)
 
@@ -304,6 +319,7 @@ def test_watch_channel_send_modify():
     tx.send_modify(lambda x: x * 2)
 
     assert 4 == rx.borrow()
+
 
 @pytest.mark.asyncio
 async def test_watch_channel_send_if_modified():
@@ -330,6 +346,7 @@ async def test_watch_channel_send_if_modified():
     assert rx._last_version == new_version
     assert 2 == rx.borrow_and_update()
 
+
 @pytest.mark.asyncio
 async def test_watch_channel_no_receivers():
     tx, rx = watch(1)
@@ -337,6 +354,7 @@ async def test_watch_channel_no_receivers():
 
     with pytest.raises(error.ReceiversDisconnected):
         tx.send(2)
+
 
 @pytest.mark.asyncio
 async def test_watch_channel_borrow_and_update():
@@ -347,6 +365,7 @@ async def test_watch_channel_borrow_and_update():
 
     tx.send(3)
     assert 3 == rx.borrow_and_update()
+
 
 @pytest.mark.asyncio
 async def test_watch_channel_changed():
@@ -360,6 +379,7 @@ async def test_watch_channel_changed():
     tx.send(3)
     await rx.changed()
     assert 3 == rx.borrow_and_update()
+
 
 @pytest.mark.asyncio
 async def test_watch_channel_multi_consumer():
@@ -395,12 +415,11 @@ async def test_watch_channel_wait():
         a=futures.ready(None),
         # Start up 2 receivers both waiting for notification of a new value
         b=wait_for_update(rx1),
-        c=wait_for_update(rx2)
+        c=wait_for_update(rx2),
     )
 
     # Send a value on the watch, both receivers should see the same value
     while tasks:
-
         match await futures.select(tasks):
             case ("a", _):
                 # There was a bug that broke notification if we sent
@@ -409,6 +428,7 @@ async def test_watch_channel_wait():
                 tx.send(3)
             case (_, value):
                 assert value == 3
+
 
 @pytest.mark.asyncio
 async def test_watch_channel_receiver_stream():
@@ -434,4 +454,3 @@ async def test_watch_channel_receiver_stream():
     del tx
     with pytest.raises(StopAsyncIteration):
         await anext(rx_stream)
-

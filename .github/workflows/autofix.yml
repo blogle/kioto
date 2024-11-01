@@ -1,9 +1,9 @@
-name: autofix
+name: autofix.ci
 on:
   workflow_call:
-    pull_request:
-    push:
-      branches: ["master"]
+  pull_request:
+  push:
+    branches: ["master"]
 
 permissions:
   contents: read
