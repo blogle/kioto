@@ -5,6 +5,7 @@ import time
 from kioto import streams
 from kioto.channels import channel
 
+
 @pytest.mark.asyncio
 async def test_iter():
     iterable = [1, 2, 3, 4, 5]
@@ -45,7 +46,6 @@ async def test_filter():
 
 @pytest.mark.asyncio
 async def test_buffered():
-
     async def task(n):
         await asyncio.sleep(1)
         return n
@@ -72,7 +72,6 @@ async def test_buffered():
 
 @pytest.mark.asyncio
 async def test_buffered_unordered():
-
     async def task(n):
         await asyncio.sleep(1)
         return n
@@ -88,11 +87,11 @@ async def test_buffered_unordered():
 
     # Ensure anext works
     value = await anext(stream)
-    possible = { 0, 1, 2, 3, 4 }
+    possible = {0, 1, 2, 3, 4}
     assert value in possible
 
     # Ensure iteration (within the collect) works
-    remaining = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9} - { value }
+    remaining = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9} - {value}
     assert set(await stream.collect()) == remaining
 
     # Ensure that the stream was executed concurrently
@@ -115,7 +114,7 @@ async def test_unordered_optimization():
         # This will prevent the buffered stream from starting the next batch of tasks until it has completed.
         # Where the unordered version can keep starting tasks without waiting for this first one to complete.
         yield expensive_task()
-        for i in range(n-1):
+        for i in range(n - 1):
             yield asyncio.sleep(1)
 
     # If n is much larger than c, the unordered version should be faster
@@ -136,7 +135,6 @@ async def test_unordered_optimization():
 
 @pytest.mark.asyncio
 async def test_flatten():
-
     async def repeat(i):
         for _ in range(i):
             yield i
@@ -154,9 +152,9 @@ async def test_flatten():
     result = await stream.collect()
     assert result == [2, 2, 3, 3, 3]
 
+
 @pytest.mark.asyncio
 async def test_flat_map():
-
     async def repeat(i):
         for _ in range(i):
             yield i
@@ -169,9 +167,9 @@ async def test_flat_map():
     result = await stream.collect()
     assert result == [2, 2, 3, 3, 3]
 
+
 @pytest.mark.asyncio
 async def test_chunks():
-
     stream = streams.iter(range(10)).chunks(3)
 
     # Ensure anext works
@@ -180,6 +178,7 @@ async def test_chunks():
     # Ensure iteration (within the collect) works
     result = await stream.collect()
     assert result == [[3, 4, 5], [6, 7, 8], [9]]
+
 
 @pytest.mark.asyncio
 async def test_ready_chunks():
@@ -212,7 +211,6 @@ async def test_ready_chunks():
 
 @pytest.mark.asyncio
 async def test_filter_map():
-
     def maybe_double(i):
         if i % 2 == 0:
             return i * 2
@@ -226,12 +224,10 @@ async def test_filter_map():
     result = await stream.collect()
     assert result == [4, 8, 12, 16]
 
+
 @pytest.mark.asyncio
 async def test_chain():
-
-    stream = streams.iter(range(3)).chain(
-        streams.iter(range(3, 6))
-    )
+    stream = streams.iter(range(3)).chain(streams.iter(range(3, 6)))
 
     # Ensure anext works
     assert await anext(stream) == 0
@@ -240,12 +236,10 @@ async def test_chain():
     result = await stream.collect()
     assert result == [1, 2, 3, 4, 5]
 
+
 @pytest.mark.asyncio
 async def test_zip():
-
-    stream = streams.iter(range(3)).zip(
-        streams.iter(range(3, 6))
-    )
+    stream = streams.iter(range(3)).zip(streams.iter(range(3, 6)))
 
     # Ensure anext works
     assert await anext(stream) == (0, 3)
@@ -254,28 +248,33 @@ async def test_zip():
     result = await stream.collect()
     assert result == [(1, 4), (2, 5)]
 
+
 @pytest.mark.asyncio
 async def test_fold():
-
     def add(acc, val):
         return acc + val
 
     # Fold returns a future, so we need to await it
     assert await streams.iter(range(5)).fold(add, 0) == 10
 
+
 # test functions
 def f(x):
     return x + 1
 
+
 def g(x):
     return x * 2
+
 
 # test predicates
 def h(x):
     return x % 2 == 0
 
+
 def j(x):
     return x % 3 == 0
+
 
 @pytest.mark.asyncio
 async def test_map_map():
@@ -283,11 +282,13 @@ async def test_map_map():
     b = streams.iter(range(10)).map(lambda x: g(f(x)))
     assert await a.collect() == await b.collect()
 
+
 @pytest.mark.asyncio
 async def test_filter_filter():
     a = streams.iter(range(10)).filter(h).filter(j)
     b = streams.iter(range(10)).filter(lambda x: h(x) and j(x))
     assert await a.collect() == await b.collect()
+
 
 @pytest.mark.asyncio
 async def test_filter_map():
@@ -295,18 +296,18 @@ async def test_filter_map():
     b = streams.iter(range(10)).filter_map(lambda x: f(x) if h(x) else None)
     assert await a.collect() == await b.collect()
 
+
 @pytest.mark.asyncio
 async def test_map_fold():
     a = streams.iter(range(10)).map(f).fold(lambda acc, val: acc + val, 0)
     b = streams.iter(range(10)).fold(lambda acc, val: acc + f(val), 0)
     assert await a == await b
 
+
 @pytest.mark.asyncio
 async def test_stream_select():
-
     select_stream = streams.select(
-        odds=streams.iter([1, 3, 5, 7]),
-        evens=streams.iter([2, 4, 6])
+        odds=streams.iter([1, 3, 5, 7]), evens=streams.iter([2, 4, 6])
     )
 
     def to_even(result):

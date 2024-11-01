@@ -6,6 +6,7 @@ from typing import Dict
 
 from kioto.futures import task_set, pending
 
+
 class Stream:
     def __aiter__(self):
         return self
@@ -213,9 +214,7 @@ class ReadyChunks(Stream):
         # While we have elements in the buffer, we will return them
         for _ in range(self.n):
             try:
-                chunk.append(
-                    self.buffer.get_nowait()
-                )
+                chunk.append(self.buffer.get_nowait())
             except asyncio.QueueEmpty:
                 return chunk
 
@@ -224,7 +223,6 @@ class ReadyChunks(Stream):
             await asyncio.sleep(0)
 
         return chunk
-
 
 
 class FilterMap(Stream):
@@ -307,6 +305,7 @@ class _GenStream(Stream):
 
     async def __anext__(self):
         return await anext(self.gen)
+
 
 class StreamSet:
     def __init__(self, streams: Dict[str, Stream]):

@@ -1,8 +1,8 @@
 import asyncio
 from typing import Any, Callable
 
-class Sink:
 
+class Sink:
     async def feed(self, item: Any):
         raise NotImplementedError
 
@@ -29,8 +29,8 @@ class Sink:
     def fanout(self, other: "Sink") -> "Fanout":
         return Fanout(self, other)
 
-class Drain(Sink):
 
+class Drain(Sink):
     async def feed(self, item: Any):
         pass
 
@@ -43,8 +43,8 @@ class Drain(Sink):
     async def close(self):
         pass
 
-class With(Sink):
 
+class With(Sink):
     def __init__(self, sink: Sink, fn: Callable[[Any], Any]):
         self._fn = fn
         self._sink = sink
@@ -74,7 +74,6 @@ class With(Sink):
 
 
 class Buffer(Sink):
-
     def __init__(self, sink: Sink, capacity: int):
         self._sink = sink
         self._queue = asyncio.Queue(maxsize=capacity)
@@ -133,7 +132,6 @@ class Buffer(Sink):
 
 
 class Fanout(Sink):
-
     def __init__(self, *sinks: Sink):
         self._sinks = sinks
         self._closed = False
@@ -143,33 +141,25 @@ class Fanout(Sink):
             raise RuntimeError("Cannot feed to a closed Sink.")
         async with asyncio.TaskGroup() as feed_group:
             for sink in self._sinks:
-                feed_group.create_task(
-                    sink.feed(item)
-                )
+                feed_group.create_task(sink.feed(item))
 
     async def send(self, item: Any):
         if self._closed:
             raise RuntimeError("Cannot send to a closed Sink.")
         async with asyncio.TaskGroup() as send_group:
             for sink in self._sinks:
-                send_group.create_task(
-                    sink.send(item)
-                )
+                send_group.create_task(sink.send(item))
 
     async def flush(self):
         if self._closed:
             raise RuntimeError("Cannot flush a closed Sink.")
         async with asyncio.TaskGroup() as flush_group:
             for sink in self._sinks:
-                flush_group.create_task(
-                    sink.flush()
-                )
+                flush_group.create_task(sink.flush())
 
     async def close(self):
         if not self._closed:
             self._closed = True
             async with asyncio.TaskGroup() as close_group:
                 for sink in self._sinks:
-                    close_group.create_task(
-                        sink.close()
-                    )
+                    close_group.create_task(sink.close())

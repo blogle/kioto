@@ -1,5 +1,6 @@
 import asyncio
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Optional
+
 
 class TaskSet:
     def __init__(self, tasks: Dict[str, Any]):
@@ -68,8 +69,8 @@ class TaskSet:
                 task.cancel()
         self._tasks.clear()
 
-class Shared:
 
+class Shared:
     def __init__(self, coro):
         self._coro = coro
         self._result = None

@@ -1,7 +1,8 @@
 import aiofiles
 
-from typing import Any, Callable, Iterable
+from typing import Any
 from kioto.sink import impl
+
 
 class FileSink(impl.Sink):
     """
@@ -15,7 +16,7 @@ class FileSink(impl.Sink):
 
     async def _ensure_file_open(self):
         if self._file is None:
-            self._file = await aiofiles.open(self._file_path, mode='a')
+            self._file = await aiofiles.open(self._file_path, mode="a")
 
     async def feed(self, item: Any):
         if self._closed:
@@ -40,6 +41,7 @@ class FileSink(impl.Sink):
                 await self._file.flush()
                 await self._file.close()
                 self._file = None
+
 
 def drain():
     return impl.Drain()

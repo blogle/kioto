@@ -244,6 +244,7 @@ async def test_task_set_partial_completion():
     with pytest.raises(ValueError):
         await select(ts)
 
+
 @pytest.mark.asyncio
 async def test_pending():
     """
@@ -260,6 +261,7 @@ async def test_pending():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
 
 @pytest.mark.asyncio
 async def test_shared_multiple_awaiters():
@@ -289,11 +291,13 @@ async def test_shared_multiple_awaiters():
     assert result3 == "shared_result"
     assert execution_count == 1  # Ensure the coroutine was executed only once
 
+
 @pytest.mark.asyncio
 async def test_shared_exception_propagation():
     """
     Test that exceptions raised by the Shared coroutine are propagated to all awaiters.
     """
+
     async def coro():
         await asyncio.sleep(0.1)
         raise ValueError("Test exception in Shared coroutine")
@@ -318,6 +322,7 @@ async def test_shared_exception_propagation():
     assert str(exception2) == "Test exception in Shared coroutine"
     assert isinstance(exception3, ValueError)
     assert str(exception3) == "Test exception in Shared coroutine"
+
 
 @pytest.mark.asyncio
 async def test_shared_exception_execution_count():
@@ -351,11 +356,13 @@ async def test_shared_exception_execution_count():
     assert str(exception2) == "Shared coroutine error"
     assert execution_count == 1  # Ensure the coroutine was executed only once
 
+
 @pytest.mark.asyncio
 async def test_lazy():
     """
     Test that `lazy` evaluates the function when awaited.
     """
+
     def add(a, b):
         return a + b
 
@@ -371,9 +378,9 @@ async def test_lazy():
     with pytest.raises(ValueError, match="Test error"):
         await lazy_error
 
+
 @pytest.mark.asyncio
 async def test_try_join():
-
     async def a():
         return "a"
 
@@ -382,6 +389,7 @@ async def test_try_join():
 
     results = await try_join(a(), b())
     assert results == ["a", "b"]
+
 
 @pytest.mark.asyncio
 async def test_try_join_exception():

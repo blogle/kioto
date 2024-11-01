@@ -3,6 +3,7 @@ import functools
 from kioto import futures
 from kioto.streams import impl
 
+
 # This is the python equivalent to tokio stream::iter(iterable)
 def iter(iterable) -> impl.Stream:
     """
@@ -52,8 +53,10 @@ def async_stream(f):
 
     return stream
 
-#def stream_set(**streams):
+
+# def stream_set(**streams):
 #    return impl.StreamSet(streams)
+
 
 @async_stream
 async def select(**streams):
