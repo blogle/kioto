@@ -1,6 +1,6 @@
 [project]
 name = "kioto"
-version = "v0.1.3"
+version = "v0.1.4"
 description = "Async utilities library inspired by Tokio"
 readme = "README.md"
 authors = [{name="Brandon Ogle", email="oglebrandon@gmail.com"}]
