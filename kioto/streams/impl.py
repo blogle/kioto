@@ -78,6 +78,7 @@ class Map(Stream):
     async def __anext__(self):
         return self.fn(await anext(self.stream))
 
+
 class Then(Stream):
     def __init__(self, stream, fn):
         self.fn = fn
