@@ -18,6 +18,9 @@ class Stream:
     def map(self, fn):
         return Map(self, fn)
 
+    def then(self, fn):
+        return Then(self, fn)
+
     def filter(self, predicate):
         return Filter(self, predicate)
 
@@ -75,6 +78,16 @@ class Map(Stream):
 
     async def __anext__(self):
         return self.fn(await anext(self.stream))
+
+
+class Then(Stream):
+    def __init__(self, stream, fn):
+        self.fn = fn
+        self.stream = stream
+
+    async def __anext__(self):
+        arg = await anext(self.stream)
+        return await self.fn(arg)
 
 
 class Filter(Stream):
