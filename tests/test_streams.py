@@ -30,6 +30,21 @@ async def test_map():
     result = await stream.collect()
     assert result == [4, 6, 8, 10]
 
+@pytest.mark.asyncio
+async def test_then():
+
+    async def task(arg):
+        return arg * 2
+
+    iterable = [1, 2, 3, 4, 5]
+    stream = streams.iter(iterable).then(task)
+
+    # Ensure anext works
+    assert await anext(stream) == 2
+
+    # Ensure iteration (within the collect) works
+    result = await stream.collect()
+    assert result == [4, 6, 8, 10]
 
 @pytest.mark.asyncio
 async def test_filter():
