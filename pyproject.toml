@@ -25,8 +25,8 @@ dev = [
 
 # Build
 [build-system]
-requires = ["setuptools>=61", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 # Tool Configurations
 
