@@ -65,7 +65,7 @@ async def select(**streams):
         try:
             name, result = await futures.select(group.task_set())
         except StopAsyncIteration:
-            pass
+            continue
         else:
             group.poll_again(name)
 
