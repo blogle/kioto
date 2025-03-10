@@ -337,18 +337,13 @@ async def test_stream_select():
     assert set(results) == {2, 2, 4, 4, 6, 6, 8}
 
 
-
 @pytest.mark.asyncio
 async def test_stream_select_once():
-    s = streams.select(
-        one=streams.once(1),
-        never=streams.pending()
-    )
+    s = streams.select(one=streams.once(1), never=streams.pending())
 
     name, value = await anext(s)
     assert name == "one"
     assert value == 1
-    
 
     # Pending task will never return
     with pytest.raises(asyncio.TimeoutError):
@@ -356,4 +351,3 @@ async def test_stream_select_once():
         # NOTE: There was a bug causing the previous task to be re-yielded
         assert name != "one"
         assert value != 1
-
