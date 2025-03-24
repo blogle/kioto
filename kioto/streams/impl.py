@@ -101,28 +101,40 @@ class Filter(Stream):
             if self.predicate(val):
                 return val
 
+async def _buffered(stream, n):
+    task_queue = collections.deque()
 
-class Buffered(Stream):
-    def __init__(self, stream, n):
-        self.n = n
-        self.tot = 0
-        self.task_queue = collections.deque()
-        self.stream = stream
+    # Buffer up n tasks on the queue
+    while len(task_queue) < n:
+        try:
+            coro = await anext(stream)
+            task = asyncio.create_task(coro)
+            task_queue.append(task)
+        except StopAsyncIteration:
+            break
 
-    async def __anext__(self):
-        while len(self.task_queue) < self.n:
+    while task_queue:
+        # Fetch a pending task and await its result
+        task = task_queue.popleft()
+        result = await task
+
+        # Refill the buffer
+        while len(task_queue) < n:
             try:
-                coro = await anext(self.stream)
+                coro = await anext(stream)
                 task = asyncio.create_task(coro)
-                self.task_queue.append(task)
-                self.tot += 1
+                task_queue.append(task)
             except StopAsyncIteration:
                 break
 
-        if self.task_queue:
-            val = self.task_queue.popleft()
-            return await val
-        raise StopAsyncIteration
+        yield result
+
+class Buffered(Stream):
+    def __init__(self, stream, n):
+        self.stream = _buffered(stream, n)
+
+    async def __anext__(self):
+        return await anext(self.stream)
 
 
 class BufferedUnordered(Stream):
