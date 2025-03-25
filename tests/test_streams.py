@@ -87,6 +87,41 @@ async def test_buffered():
 
 
 @pytest.mark.asyncio
+async def test_buffered_early_yield():
+    @streams.async_stream
+    async def slow_stream():
+        yield 1
+        yield 2
+        yield 3
+        await asyncio.sleep(1)
+        yield 4
+
+    async def f(x):
+        await asyncio.sleep(0.1)
+        return x
+
+    # Here we are requesting more buffered space than the actual stream contains.
+    # We want to assert that our stream yields elements before the sleep and before
+    # we hit the StopAsyncIteration
+    st = slow_stream().map(f).buffered(5)
+    then = time.monotonic()
+    assert 1 == await anext(st)
+    assert 2 == await anext(st)
+    assert 3 == await anext(st)
+    duration = time.monotonic() - then
+
+    # Check that we got concurrency
+    assert duration < 0.15
+
+    # Check that buffered wasn't blocked on the 4th element
+    assert duration < 1
+
+    assert 4 == await anext(st)
+    with pytest.raises(StopAsyncIteration):
+        await anext(st)
+
+
+@pytest.mark.asyncio
 async def test_buffered_unordered():
     async def task(n):
         await asyncio.sleep(1)
@@ -113,6 +148,43 @@ async def test_buffered_unordered():
     # Ensure that the stream was executed concurrently
     duration = time.monotonic() - now
     assert duration < 1.2 * (n // c)
+
+
+@pytest.mark.asyncio
+async def test_buffered_unordered_early_yield():
+    @streams.async_stream
+    async def slow_stream():
+        yield 1
+        yield 2
+        yield 3
+        await asyncio.sleep(1)
+        yield 4
+
+    async def f(x):
+        await asyncio.sleep(0.1)
+        return x
+
+    # Here we are requesting more buffered space than the actual stream contains.
+    # We want to assert that our stream yields elements before the sleep and before
+    # we hit the StopAsyncIteration
+    st = slow_stream().map(f).buffered_unordered(5)
+    then = time.monotonic()
+    a = await anext(st)
+    b = await anext(st)
+    c = await anext(st)
+    duration = time.monotonic() - then
+
+    assert {a, b, c} == {1, 2, 3}
+
+    # Check that we got concurrency
+    assert duration < 0.15
+
+    # Check that buffered wasn't blocked on the 4th element
+    assert duration < 1
+
+    assert 4 == await anext(st)
+    with pytest.raises(StopAsyncIteration):
+        await anext(st)
 
 
 @pytest.mark.asyncio
