@@ -88,7 +88,6 @@ async def test_buffered():
 
 @pytest.mark.asyncio
 async def test_buffered_early_yield():
-    
     @streams.async_stream
     async def slow_stream():
         yield 1
@@ -113,13 +112,14 @@ async def test_buffered_early_yield():
 
     # Check that we got concurrency
     assert duration < 0.15
-    
+
     # Check that buffered wasn't blocked on the 4th element
     assert duration < 1
 
     assert 4 == await anext(st)
     with pytest.raises(StopAsyncIteration):
         await anext(st)
+
 
 @pytest.mark.asyncio
 async def test_buffered_unordered():
@@ -149,9 +149,9 @@ async def test_buffered_unordered():
     duration = time.monotonic() - now
     assert duration < 1.2 * (n // c)
 
+
 @pytest.mark.asyncio
 async def test_buffered_unordered_early_yield():
-    
     @streams.async_stream
     async def slow_stream():
         yield 1
@@ -175,16 +175,17 @@ async def test_buffered_unordered_early_yield():
     duration = time.monotonic() - then
 
     assert {a, b, c} == {1, 2, 3}
-    
+
     # Check that we got concurrency
     assert duration < 0.15
-    
+
     # Check that buffered wasn't blocked on the 4th element
     assert duration < 1
 
     assert 4 == await anext(st)
     with pytest.raises(StopAsyncIteration):
         await anext(st)
+
 
 @pytest.mark.asyncio
 async def test_unordered_optimization():

@@ -1,6 +1,5 @@
 import asyncio
 import builtins
-import collections
 
 from typing import Dict
 
@@ -101,15 +100,18 @@ class Filter(Stream):
             if self.predicate(val):
                 return val
 
+
 class _Sentinel:
     """Special marker object used to signal the end of the stream."""
+
     def __repr__(self):
         return "<_Sentinel>"
+
 
 async def _queue_stream(result_queue: asyncio.Queue):
     """
     Asynchronously yield results from tasks as they complete.
-    
+
     This function waits for tasks to be put into the result_queue.
     When it retrieves the sentinel value, it stops iteration.
     """
@@ -120,22 +122,23 @@ async def _queue_stream(result_queue: asyncio.Queue):
         # Propagate the task result (or exception if the task failed)
         yield task_result
 
+
 async def _buffered(stream, buffer_size: int):
     """
     Buffered stream implementation that spawns tasks from the input stream,
     buffering up to buffer_size tasks. It yields results as soon as they are available.
-    
+
     The approach uses two concurrent "threads":
       - One that pushes new tasks into a bounded queue (the spawner).
       - One that consumes results from that queue (the consumer).
-    
+
     When the underlying stream is exhausted, a sentinel is enqueued so that the consumer
     terminates once all completed task results have been yielded.
-    
+
     Args:
         stream: An async iterable representing the source stream.
         buffer_size: Maximum number of concurrent tasks to buffer.
-        
+
     Yields:
         Results from the tasks as they complete.
     """
@@ -160,33 +163,36 @@ async def _buffered(stream, buffer_size: int):
     # Ensure the spawner task is awaited in case it is still running.
     await spawner_task
 
+
 class Buffered(Stream):
     """
     Buffered stream that spawns tasks from an underlying stream with a specified buffer size.
-    
+
     Results are yielded as soon as individual tasks complete.
     """
+
     def __init__(self, stream, buffer_size: int):
         self.stream = _buffered(stream, buffer_size)
 
     async def __anext__(self):
         return await anext(self.stream)
 
+
 async def _buffered_unordered(stream, buffer_size: int):
     """
     Asynchronously buffers tasks from the given stream, allowing up to 'buffer_size'
     tasks to run concurrently, and yields their results in the order of completion.
-    
+
     This implementation uses a task set to manage two types of tasks:
       - The "spawn" task that pulls the next element from the stream.
       - The buffered tasks (with names corresponding to slot IDs) that are running.
-    
+
     If no available slot exists, a new task is deferred until a slot becomes free.
-    
+
     Args:
         stream: An async iterable that yields tasks (or values to be wrapped in tasks).
         buffer_size: Maximum number of concurrent tasks.
-    
+
     Yields:
         The result of each task as it completes.
     """
@@ -236,10 +242,11 @@ async def _buffered_unordered(stream, buffer_size: int):
 class BufferedUnordered(Stream):
     """
     Stream implementation that yields results from tasks in an unordered fashion.
-    
+
     It buffers tasks from the underlying stream up to 'buffer_size' concurrently.
     As soon as any task completes, its result is yielded and its slot is freed for reuse.
     """
+
     def __init__(self, stream, buffer_size: int):
         self.stream = _buffered_unordered(stream, buffer_size)
 
