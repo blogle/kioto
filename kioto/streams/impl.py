@@ -102,100 +102,146 @@ class Filter(Stream):
                 return val
 
 class _Sentinel:
-    ...
+    """Special marker object used to signal the end of the stream."""
+    def __repr__(self):
+        return "<_Sentinel>"
 
-
-async def _queue_stream(queue):
-    while True:
-        task = await queue.get()
-        if isinstance(task, _Sentinel):
-            return
-        yield await task
-
-async def _buffered(stream, n):
-    task_queue = asyncio.Queue(n)
-
-    # Here we create two tasks that we race against one another.
-    # The first tries to queue as many tasks as it can while the
-    # other runs the next task. 
-    push_work = (
-        stream
-            .map(asyncio.create_task)
-            .then(task_queue.put)
-    )
+async def _queue_stream(result_queue: asyncio.Queue):
+    """
+    Asynchronously yield results from tasks as they complete.
     
-    it = _queue_stream(task_queue)
+    This function waits for tasks to be put into the result_queue.
+    When it retrieves the sentinel value, it stops iteration.
+    """
+    while True:
+        task_result = await result_queue.get()
+        if isinstance(task_result, _Sentinel):
+            return
+        # Propagate the task result (or exception if the task failed)
+        yield task_result
 
-    tasks = task_set(
-       spawn=anext(push_work),
-       results=anext(it)
+async def _buffered(stream, buffer_size: int):
+    """
+    Buffered stream implementation that spawns tasks from the input stream,
+    buffering up to buffer_size tasks. It yields results as soon as they are available.
+    
+    The approach uses two concurrent "threads":
+      - One that pushes new tasks into a bounded queue (the spawner).
+      - One that consumes results from that queue (the consumer).
+    
+    When the underlying stream is exhausted, a sentinel is enqueued so that the consumer
+    terminates once all completed task results have been yielded.
+    
+    Args:
+        stream: An async iterable representing the source stream.
+        buffer_size: Maximum number of concurrent tasks to buffer.
+        
+    Yields:
+        Results from the tasks as they complete.
+    """
+    result_queue = asyncio.Queue(buffer_size)
+
+    # Convert each element from the stream into a task and push into the result_queue.
+    # When the stream is exhausted, enqueue a sentinel value.
+    push_tasks = (
+        stream.map(asyncio.create_task)
+        .chain(Once(_Sentinel()))
+        .then(result_queue.put)
+        .collect()
     )
 
-    while tasks:
-        # Eventually we will exhaust the underlying stream. At this point
-        # we need to signal the task queue iterator that we have reached the
-        # end. The buffered stream is exhausted once both tasks exit.
-        try:
-            completion = await select(tasks)
-        except StopAsyncIteration:
-            await task_queue.put(_Sentinel())
-            continue
+    # Start a task that spawns tasks from the stream.
+    spawner_task = asyncio.create_task(push_tasks)
 
-        match completion:
-            case ("spawn", coro):
-                tasks.update("spawn", anext(push_work))
-            
-            case ("results", result):
-                tasks.update("results", anext(it))
-                yield result
+    # Create a generator that yields results from the result_queue.
+    async for result in _queue_stream(result_queue):
+        yield await result
 
+    # Ensure the spawner task is awaited in case it is still running.
+    await spawner_task
 
 class Buffered(Stream):
-    def __init__(self, stream, n):
-        self.stream = _buffered(stream, n)
+    """
+    Buffered stream that spawns tasks from an underlying stream with a specified buffer size.
+    
+    Results are yielded as soon as individual tasks complete.
+    """
+    def __init__(self, stream, buffer_size: int):
+        self.stream = _buffered(stream, buffer_size)
 
     async def __anext__(self):
         return await anext(self.stream)
 
-
-async def _buffered_unordered(stream, n):
+async def _buffered_unordered(stream, buffer_size: int):
+    """
+    Asynchronously buffers tasks from the given stream, allowing up to 'buffer_size'
+    tasks to run concurrently, and yields their results in the order of completion.
+    
+    This implementation uses a task set to manage two types of tasks:
+      - The "spawn" task that pulls the next element from the stream.
+      - The buffered tasks (with names corresponding to slot IDs) that are running.
+    
+    If no available slot exists, a new task is deferred until a slot becomes free.
+    
+    Args:
+        stream: An async iterable that yields tasks (or values to be wrapped in tasks).
+        buffer_size: Maximum number of concurrent tasks.
+    
+    Yields:
+        The result of each task as it completes.
+    """
+    # Start the task set with the first element of the stream under the "spawn" key.
     tasks = task_set(spawn=anext(stream))
-    notification = asyncio.Event()
-    slots = set(range(n))
+    # Event to signal that at least one buffering slot is available.
+    slot_notification = asyncio.Event()
+    # Set of available slot IDs (represented as integers).
+    available_slots = set(range(buffer_size))
 
-    async def spawn_later(coro):
-        await notification.wait()
-        return coro
+    async def spawn_later(spawned_task):
+        """
+        Defers spawning of the task until a buffering slot becomes available.
+        """
+        await slot_notification.wait()
+        return spawned_task
 
     while tasks:
         try:
             completion = await select(tasks)
         except StopAsyncIteration:
+            # If the underlying stream is exhausted, continue processing remaining tasks.
             continue
 
         match completion:
-
-            case ("spawn", coro):
+            case ("spawn", spawned_task):
                 try:
-                    task_id = slots.pop()
+                    # Attempt to get an available slot.
+                    slot_id = available_slots.pop()
                 except KeyError:
-                    notification.clear()
-                    tasks.update("spawn", spawn_later(coro))
+                    # No slot available: clear the notification and defer the spawned task.
+                    slot_notification.clear()
+                    tasks.update("spawn", spawn_later(spawned_task))
                 else:
-                    tasks.update(str(task_id), coro)
+                    # Assign the spawned task a unique slot name.
+                    tasks.update(str(slot_id), spawned_task)
+                    # Request the next task from the stream.
                     tasks.update("spawn", anext(stream))
 
-
-            case (task_id, result):
-                # Make this worker available for more work
-                slots.add(int(task_id))
-                notification.set()
+            case (slot_name, result):
+                # When a buffered task completes, free its slot.
+                available_slots.add(int(slot_name))
+                slot_notification.set()
                 yield result
-        
+
 
 class BufferedUnordered(Stream):
-    def __init__(self, stream, n):
-        self.stream = _buffered_unordered(stream, n)
+    """
+    Stream implementation that yields results from tasks in an unordered fashion.
+    
+    It buffers tasks from the underlying stream up to 'buffer_size' concurrently.
+    As soon as any task completes, its result is yielded and its slot is freed for reuse.
+    """
+    def __init__(self, stream, buffer_size: int):
+        self.stream = _buffered_unordered(stream, buffer_size)
 
     async def __anext__(self):
         return await anext(self.stream)
