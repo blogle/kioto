@@ -4,7 +4,7 @@ import collections
 
 from typing import Dict
 
-from kioto.futures import task_set, pending
+from kioto.futures import pending, select, task_set
 
 
 class Stream:
@@ -101,33 +101,54 @@ class Filter(Stream):
             if self.predicate(val):
                 return val
 
+class _Sentinel:
+    ...
+
+
+async def _queue_stream(queue):
+    while True:
+        task = await queue.get()
+        if isinstance(task, _Sentinel):
+            return
+        yield await task
+
 async def _buffered(stream, n):
-    task_queue = collections.deque()
+    task_queue = asyncio.Queue(n)
 
-    # Buffer up n tasks on the queue
-    while len(task_queue) < n:
+    # Here we create two tasks that we race against one another.
+    # The first tries to queue as many tasks as it can while the
+    # other runs the next task. 
+    push_work = (
+        stream
+            .map(asyncio.create_task)
+            .then(task_queue.put)
+    )
+    
+    it = _queue_stream(task_queue)
+
+    tasks = task_set(
+       spawn=anext(push_work),
+       results=anext(it)
+    )
+
+    while tasks:
+        # Eventually we will exhaust the underlying stream. At this point
+        # we need to signal the task queue iterator that we have reached the
+        # end. The buffered stream is exhausted once both tasks exit.
         try:
-            coro = await anext(stream)
-            task = asyncio.create_task(coro)
-            task_queue.append(task)
+            completion = await select(tasks)
         except StopAsyncIteration:
-            break
+            await task_queue.put(_Sentinel())
+            continue
 
-    while task_queue:
-        # Fetch a pending task and await its result
-        task = task_queue.popleft()
-        result = await task
+        match completion:
+            case ("spawn", coro):
+                tasks.update("spawn", anext(push_work))
+            
+            case ("results", result):
+                tasks.update("results", anext(it))
+                yield result
 
-        # Refill the buffer
-        while len(task_queue) < n:
-            try:
-                coro = await anext(stream)
-                task = asyncio.create_task(coro)
-                task_queue.append(task)
-            except StopAsyncIteration:
-                break
-
-        yield result
 
 class Buffered(Stream):
     def __init__(self, stream, n):
@@ -137,35 +158,47 @@ class Buffered(Stream):
         return await anext(self.stream)
 
 
+async def _buffered_unordered(stream, n):
+    tasks = task_set(spawn=anext(stream))
+    notification = asyncio.Event()
+    slots = set(range(n))
+
+    async def spawn_later(coro):
+        await notification.wait()
+        return coro
+
+    while tasks:
+        try:
+            completion = await select(tasks)
+        except StopAsyncIteration:
+            continue
+
+        match completion:
+
+            case ("spawn", coro):
+                try:
+                    task_id = slots.pop()
+                except KeyError:
+                    notification.clear()
+                    tasks.update("spawn", spawn_later(coro))
+                else:
+                    tasks.update(str(task_id), coro)
+                    tasks.update("spawn", anext(stream))
+
+
+            case (task_id, result):
+                # Make this worker available for more work
+                slots.add(int(task_id))
+                notification.set()
+                yield result
+        
+
 class BufferedUnordered(Stream):
     def __init__(self, stream, n):
-        self.n = n
-        self.completed = set()
-        self.pending = set()
-        self.stream = stream
-
-    def __len__(self):
-        return len(self.completed) + len(self.pending)
+        self.stream = _buffered_unordered(stream, n)
 
     async def __anext__(self):
-        while len(self) < self.n:
-            try:
-                coro = await anext(self.stream)
-                task = asyncio.create_task(coro)
-                self.pending.add(task)
-            except StopAsyncIteration:
-                break
-
-        if self.completed:
-            return await self.completed.pop()
-
-        if self.pending:
-            self.completed, self.pending = await asyncio.wait(
-                self.pending, return_when=asyncio.FIRST_COMPLETED
-            )
-            return await self.completed.pop()
-
-        raise StopAsyncIteration
+        return await anext(self.stream)
 
 
 async def _flatten(nested_st):
