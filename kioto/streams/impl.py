@@ -6,6 +6,7 @@ from typing import Dict
 
 from kioto.futures import pending, select, task_set
 
+
 class Stream:
     def __aiter__(self):
         return self
@@ -100,21 +101,23 @@ class Filter(Stream):
             if self.predicate(val):
                 return val
 
+
 class SlotQueue:
     """
     An asynchronous queue built on top of a collections.deque with slot reservation and peek support.
-    
+
     API:
-      - `async with queue.put() as slot:` 
+      - `async with queue.put() as slot:`
             Reserve a slot in the queue, then set the value via `slot.value = ...`
       - `async with queue.get() as slot:`
-            Wait until an item is available; then access the item via `slot.value` 
+            Wait until an item is available; then access the item via `slot.value`
             (the item is only removed after exiting the context).
-    
+
     The queue has a fixed capacity. A slot is reserved via put() only if there is space
     (i.e. the total number of committed items is less than the capacity). Consumers using get()
     wait until at least one committed item is available.
     """
+
     def __init__(self, capacity: int):
         self._capacity = capacity
         self._items = collections.deque()  # Holds committed items.
@@ -123,21 +126,21 @@ class SlotQueue:
         self._not_full = asyncio.Condition(self._lock)
         # Condition for waiting until an item is available.
         self._not_empty = asyncio.Condition(self._lock)
-        
+
     def put(self):
         """
         Returns an async context manager that reserves a slot in the queue.
-        
+
         Usage:
             async with queue.put() as slot:
                 slot.value = <your value>
         """
         return _PutSlot(self)
-    
+
     def get(self):
         """
         Returns an async context manager that waits for an item to be available.
-        
+
         Usage:
             async with queue.get() as slot:
                 item = slot.value  # The item is available to be peeked at.
@@ -145,18 +148,20 @@ class SlotQueue:
         """
         return _GetSlot(self)
 
+
 class _PutSlot:
     """
     Async context manager for putting an item into an SlotQueue.
-    
+
     Upon __aenter__, it waits until a free slot is available (i.e. there is room in the queue).
     Then the caller can set its `value` attribute.
-    
+
     Upon __aexit__, if no exception occurred the value is committed to the queue, and
     waiting consumers are notified.
     """
+
     __slots__ = ("_queue", "value", "_reserved")
-    
+
     def __init__(self, queue: SlotQueue):
         self._queue = queue
         self.value = None
@@ -181,18 +186,20 @@ class _PutSlot:
             self._queue._not_full.notify_all()
         return False  # Do not suppress exceptions.
 
+
 class _GetSlot:
     """
     Async context manager for getting an item from an SlotQueue.
-    
-    Upon __aenter__, it waits until an item is available and then returns a slot object 
+
+    Upon __aenter__, it waits until an item is available and then returns a slot object
     whose `value` attribute is the next item in the queue (without removing it).
-    
+
     Upon __aexit__, the item is removed from the queue and producers waiting for space
     are notified.
     """
+
     __slots__ = ("_queue", "value")
-    
+
     def __init__(self, queue: SlotQueue):
         self._queue = queue
         self.value = None
@@ -239,7 +246,7 @@ async def _buffered(stream, buffer_size: int):
     Yields:
         Results from the tasks as they complete.
     """
-    result_queue = SlotQueue(buffer_size) 
+    result_queue = SlotQueue(buffer_size)
 
     # Convert each element from the stream into a task and push into the result_queue.
     # When the stream is exhausted, enqueue a sentinel value.
@@ -264,7 +271,6 @@ async def _buffered(stream, buffer_size: int):
 
             # Propagate the task result (or exception if the task failed)
             yield await task
-
 
     # Ensure the spawner task is awaited in case it is still running.
     await spawner_task

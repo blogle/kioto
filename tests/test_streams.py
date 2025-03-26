@@ -186,6 +186,7 @@ async def test_buffered_unordered_early_yield():
     with pytest.raises(StopAsyncIteration):
         await anext(st)
 
+
 class TaskCounter:
     def __init__(self):
         self.current_running = 0
@@ -205,6 +206,7 @@ class TaskCounter:
 
         return x
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("n", [1, 5, 10, 11])
 async def test_buffered_concurrency_level(n):
@@ -217,9 +219,11 @@ async def test_buffered_concurrency_level(n):
     results = await streams.iter(range(elems)).map(tc.process).buffered(n).collect()
 
     # Verify that all items were processed and that concurrency never exceeded 1.
-    min_concur = max(n-1, 1)
+    min_concur = max(n - 1, 1)
     assert results == list(range(elems))
-    assert min_concur <= tc.max_running, f"Max concurrency was {tc.max_running}, expected at least {min_concur}"
+    assert (
+        min_concur <= tc.max_running
+    ), f"Max concurrency was {tc.max_running}, expected at least {min_concur}"
 
 
 @pytest.mark.asyncio
@@ -231,12 +235,16 @@ async def test_buffered_unordered_concurrency_level(n):
     # Create a stream, map each item with 'process', then buffer with a capacity of 1.
     elems = 10
     tc = TaskCounter()
-    results = await streams.iter(range(elems)).map(tc.process).buffered_unordered(n).collect()
+    results = (
+        await streams.iter(range(elems)).map(tc.process).buffered_unordered(n).collect()
+    )
 
     # Verify that all items were processed and that concurrency never exceeded 1.
     concur = min(elems, n)
     assert set(results) == set(range(elems))
-    assert tc.max_running == concur, f"Max concurrency was {tc.max_running}, expected == {n}"
+    assert (
+        tc.max_running == concur
+    ), f"Max concurrency was {tc.max_running}, expected == {n}"
 
 
 @pytest.mark.asyncio
