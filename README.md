@@ -7,11 +7,44 @@
 
 ## Features
 
-- **Async Channels:** Facilitate communication between asynchronous tasks with bounded and unbounded channels.
-- **Futures and Task Management:** Simplify asynchronous task handling with utilities for managing task sets, selection, and shared futures.
-- **Streams and Sinks:** Provide stream processing capabilities, including mapping, filtering, buffering, and more.
-- **Synchronization Primitives:** Offer advanced synchronization tools like mutexes for managing shared state.
-- **Time Utilities:** Handle asynchronous timing operations, intervals, and timeouts seamlessly.
+**Asynchronous Streams (kioto.streams)**
+
+- *Streams*: The library provides an abstraction over asynchronous data streams, allowing you to work with sequences of data that are produced asynchronously.
+- *Stream Transformations*: It includes methods like map, filter, flat_map, chunks, zip, etc., enabling functional-style transformations on streams.
+- *Stream Creation*: Functions like iter, once, repeat, and repeat_with help in creating streams from various sources.
+- *Stream Composition*: The chain method allows for sequential composition of streams, and select enables racing multiple streams and processing their outputs as they become available.
+
+**Asynchronous Channels (kioto.channels):**
+
+- *Channels:* They provide a way for different parts of your application to communicate asynchronously by sending messages to each other.
+- *Bounded and Unbounded Channels:* You can create channels with or without capacity limits, controlling backpressure and flow of data.
+- *One-shot Channels:* For sending a single message between tasks.
+- *Watch Channels:* Allow tasks to watch a value and get notified when it changes.
+- *Channel Integration:* Channels can be converted into streams (into_stream) and sinks (into_sink), enabling seamless integration with other parts of the library.
+
+**Futures and Task Utilities (kioto.futures):**
+
+- *Futures:* Abstractions over asynchronous computations that will produce a result in the future.
+- *Task Sets:* Group multiple asynchronous tasks and await their completion, either individually or collectively.
+- *Selection and Racing:* The select function allows you to wait for the first task to complete among a set, enabling patterns like racing tasks.
+- *Shared Futures:* The shared function lets multiple tasks await the same future, ensuring the computation is only performed once.
+- *Lazy Evaluation:* The lazy function defers computation until the result is needed.
+
+**Sinks (kioto.sink):**
+
+- *Sinks:* Represent consumers of data streams. They receive data and process it, potentially asynchronously.
+- *Sink Transformations:* Methods like with_map, buffer, and fanout allow you to modify or control the flow of data into the sink.
+- *File Sinks:* A concrete implementation that writes streamed data to files asynchronously.
+
+**Time Utilities (kioto.time):**
+
+- *Intervals and Timers:* Functions like interval and interval_at help in scheduling tasks to run at specific intervals.
+- *Timeouts:* Functions like timeout and timeout_at allow you to impose time limits on asynchronous operations.
+- *Sleeping:* The sleep_until function enables tasks to pause execution until a specific time.
+
+**Synchronization Primitives (kioto.sync):**
+
+- *Mutex:* An asynchronous mutex for synchronizing access to shared resources across tasks, ensuring data integrity without blocking the event loop.
 
 ## Usage Examples
 
