@@ -454,3 +454,19 @@ async def test_watch_channel_receiver_stream():
     del tx
     with pytest.raises(StopAsyncIteration):
         await anext(rx_stream)
+
+@pytest.mark.asyncio
+async def test_watch_channel_cancel():
+    tx, rx = watch(1)
+
+    task = asyncio.create_task(rx.changed())
+    await asyncio.sleep(.1)
+    task.cancel()
+
+    # Despite previous cancelation, we can still read the value
+    tx.send(1)
+    assert rx.borrow_and_update() == 1
+
+    tx.send(2)
+    assert rx.borrow_and_update() == 2
+
