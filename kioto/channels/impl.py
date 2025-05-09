@@ -331,9 +331,7 @@ class WatchChannel:
         """
         Notify all receivers that a new value is available
         """
-        while self._waiters:
-            tx = self._waiters.pop()
-            tx.send(())
+        notify_all(self._waiters)
 
     async def wait(self):
         # Create a oneshot channel
