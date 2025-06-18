@@ -398,6 +398,46 @@ async def test_zip():
 
 
 @pytest.mark.asyncio
+async def test_switch():
+    async def f(n):
+        await asyncio.sleep(1)
+        return n
+
+    now = time.monotonic()
+
+    # Switch on a function that sleeps for a second an returns the input, the next
+    # value is always available on the stream, so we should only get the last result.
+    stream = streams.iter(range(4)).switch(f)
+    result = await stream.collect()
+    assert result == [3]
+
+    # We should have only waited for one of the coroutines to complete
+    duration = time.monotonic() - now
+    assert duration < 1.1
+
+
+@pytest.mark.asyncio
+async def test_debounce():
+    @streams.async_stream
+    async def st():
+        n = 5
+        for i in range(n):
+            await asyncio.sleep(0.05)
+            yield i
+
+        await asyncio.sleep(0.6)
+        yield n
+
+    # The initial batch of values each return within our debounce duration,
+    # so we skip all but the last in the batch. Then after a longer delay
+    # we exhaust the stream which will also be yielded.
+    stream = st()
+    result = await stream.debounce(0.500).collect()
+
+    assert result == [4, 5]
+
+
+@pytest.mark.asyncio
 async def test_fold():
     def add(acc, val):
         return acc + val
