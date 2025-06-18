@@ -498,12 +498,9 @@ class Switch(Stream):
     async def __aiter__(self):
         # Initialize a task set, with a coroutine to fetch the next item off the stream.
 
-        tasks = task_set(
-            anext=anext(self.stream)
-        )
+        tasks = task_set(anext=anext(self.stream))
 
         while tasks:
-
             try:
                 result = await select(tasks)
             except StopAsyncIteration:
@@ -512,7 +509,6 @@ class Switch(Stream):
                 continue
 
             match result:
-
                 case ("anext", elem):
                     # A new element has come available, so cancel the pending result
                     # and schedule a new coroutine in its place
@@ -526,22 +522,16 @@ class Switch(Stream):
 
 
 class Debounce(Stream):
-
     def __init__(self, stream, duration):
         self.stream = stream
-        self.duration = duration 
+        self.duration = duration
 
     async def __aiter__(self):
-        
         # Initialize a task set with tasks to get the next elem and a delay
         pending = None
-        tasks = task_set(
-            anext=anext(self.stream),
-            delay=asyncio.sleep(self.duration)
-        )
+        tasks = task_set(anext=anext(self.stream), delay=asyncio.sleep(self.duration))
 
         while tasks:
-
             try:
                 result = await select(tasks)
             except StopAsyncIteration:
@@ -549,7 +539,6 @@ class Debounce(Stream):
                 continue
 
             match result:
-                
                 case ("anext", elem):
                     # Update the pending element with the latest item
                     pending = elem
@@ -564,7 +553,6 @@ class Debounce(Stream):
                     if elem := pending:
                         pending = None
                         yield elem
-
 
 
 async def _once(value):
