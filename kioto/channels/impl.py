@@ -327,12 +327,6 @@ class WatchChannel:
         """
         return self._queue[0]
 
-    def notify(self):
-        """
-        Notify all receivers that a new value is available
-        """
-        notify_all(self._waiters)
-
     async def wait(self):
         # Create a oneshot channel
         channel = OneShotChannel()
@@ -352,7 +346,7 @@ class WatchChannel:
         with self._lock:
             self._queue.append(value)
             self._version += 1
-            self.notify()
+            notify_all(self._waiters)
 
 
 class WatchSender:

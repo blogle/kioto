@@ -1,4 +1,6 @@
 import asyncio
+import time
+import threading
 import pytest
 
 from kioto import streams, futures
@@ -455,6 +457,20 @@ async def test_watch_channel_receiver_stream():
     with pytest.raises(StopAsyncIteration):
         await anext(rx_stream)
 
+@pytest.mark.asyncio
+async def test_watch_channel_change_cancel():
+    tx, rx = watch(1)
+
+    task = asyncio.create_task(rx.changed())
+    await asyncio.sleep(0.1)
+    task.cancel()
+
+    # Despite the previous cancellation, we can still read the value
+    tx.send(1)
+    assert rx.borrow_and_update() == 1
+
+    tx.send(2)
+    assert rx.borrow_and_update() == 2
 
 @pytest.mark.asyncio
 async def test_watch_channel_cancel():
