@@ -28,15 +28,17 @@ def task_set(**tasks) -> impl.TaskSet:
 
 async def select(task_group: impl.TaskSet) -> Tuple[str, Any]:
     """
-    Await the first task in the TaskGroup to complete and return its result.
+    Await the first task in the ``TaskSet`` to complete and return its outcome.
 
-    :param task_group: The TaskGroup containing tasks to monitor.
-    :return: A tuple of the task name and its result.
-    :raises ValueError: If the TaskGroup is empty.
-    :raises Exception: Propagates any exception raised by the completed task.
+    The returned value may be a normal result, an exception instance, or
+    ``asyncio.CancelledError`` for cancelled tasks.
+
+    :param task_group: The ``TaskSet`` containing tasks to monitor.
+    :return: ``Tuple[str, Any]`` of the task name and its result or exception.
+    :raises ValueError: If the ``TaskSet`` is empty.
     """
     if not task_group:
-        raise ValueError("select called on an empty TaskGroup! - nothing to poll")
+        raise ValueError("select called on an empty TaskSet! - nothing to poll")
 
     done, _ = await asyncio.wait(
         task_group.get_tasks(), return_when=asyncio.FIRST_COMPLETED
@@ -44,25 +46,27 @@ async def select(task_group: impl.TaskSet) -> Tuple[str, Any]:
 
     result = None
     for task in done:
-        name = task_group.pop_task(task)
+        if task in task_group._cancelled_tasks:
+            name = task_group._cancelled_tasks.pop(task)
+        else:
+            name = task_group.pop_task(task)
         # Directly retrieve the result, capture exceptions for now so we can
         # handle any other completed results and requeue them for polling
         try:
             task_result = task.result()
-        except Exception as e:
+        except BaseException as e:
             task_result = e
 
         if result is None:
             result = (name, task_result)
         else:
-            # Re-queue the task with its result if needed
-            task_group.update(name, ready(task_result))
+            # Re-queue the task with its result if needed, but avoid name
+            # collisions when another task with the same name has already been
+            # scheduled.
+            if name not in task_group._tasks:
+                task_group.update(name, ready(task_result))
 
-    # If the task encountered an exception, re-raise
-    name, value = result
-    if isinstance(value, Exception):
-        raise value
-    return name, value
+    return result
 
 
 async def pending():

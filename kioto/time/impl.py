@@ -67,25 +67,27 @@ class Interval:
 
     async def tick(self):
         self.ticks += 1
-        now = time.monotonic()
-        deadline = self.start + self.period * self.ticks
-        if now > deadline + 1e-5:
-            # If the deadline has passed, we need to determine how to handle the missed tick.
-            match self.missed_tick_behavior:
-                # If using the burst behavior, will return continue to return immediately until caught up.
-                case MissedTickBehavior.Burst:
-                    return
+        while True:
+            now = time.monotonic()
+            deadline = self.start + self.period * self.ticks
+            if now > deadline + 1e-5:
+                # If the deadline has passed, we need to determine how to handle the missed tick.
+                match self.missed_tick_behavior:
+                    # If using the burst behavior, continue returning immediately until caught up.
+                    case MissedTickBehavior.Burst:
+                        return
 
-                # if using the delay behavior, we will return immediately once and future ticks will be offset by the delay.
-                case MissedTickBehavior.Delay:
-                    self.reset_at(now)
-                    return
+                    # If using the delay behavior, return immediately once and future ticks will be offset by the delay.
+                    case MissedTickBehavior.Delay:
+                        self.reset_at(now)
+                        return
 
-                # If using the skip behavior, we will skip the missed tick and return at the next period.
-                case MissedTickBehavior.Skip:
-                    self.ticks += (now - deadline) // self.period
-                    return
+                    # If using the skip behavior, skip the missed tick and return at the next period.
+                    case MissedTickBehavior.Skip:
+                        self.ticks += (now - deadline) // self.period
+                        return
 
-        # If the deadline has not passed, wait until the deadline.
-        # import pdb; pdb.set_trace()
-        await asyncio.sleep(deadline - now)
+            sleep_time = deadline - now
+            if sleep_time <= 0:
+                return
+            await asyncio.sleep(sleep_time)
