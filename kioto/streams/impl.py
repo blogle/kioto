@@ -522,7 +522,9 @@ class Debounce(Stream):
     async def __aiter__(self):
         # Initialize a task set with tasks to get the next elem and a delay
         pending = None
-        tasks = task_set(anext=builtins.anext(self.stream), delay=asyncio.sleep(self.duration))
+        tasks = task_set(
+            anext=builtins.anext(self.stream), delay=asyncio.sleep(self.duration)
+        )
 
         while tasks:
             name, res = await select(tasks)
