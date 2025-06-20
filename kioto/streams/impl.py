@@ -61,7 +61,7 @@ class Stream:
         return acc
 
     async def collect(self):
-        return [i async for i in aiter(self)]
+        return [i async for i in builtins.aiter(self)]
 
 
 class Iter(Stream):
@@ -81,7 +81,7 @@ class Map(Stream):
         self.stream = stream
 
     async def __anext__(self):
-        return self.fn(await anext(self.stream))
+        return self.fn(await builtins.anext(self.stream))
 
 
 class Then(Stream):
@@ -90,7 +90,7 @@ class Then(Stream):
         self.stream = stream
 
     async def __anext__(self):
-        arg = await anext(self.stream)
+        arg = await builtins.anext(self.stream)
         return await self.fn(arg)
 
 
@@ -101,7 +101,7 @@ class Filter(Stream):
 
     async def __anext__(self):
         while True:
-            val = await anext(self.stream)
+            val = await builtins.anext(self.stream)
             if self.predicate(val):
                 return val
 
@@ -291,7 +291,7 @@ class Buffered(Stream):
         self.stream = _buffered(stream, buffer_size)
 
     async def __anext__(self):
-        return await anext(self.stream)
+        return await builtins.anext(self.stream)
 
 
 async def _buffered_unordered(stream, buffer_size: int):
@@ -313,7 +313,7 @@ async def _buffered_unordered(stream, buffer_size: int):
         The result of each task as it completes.
     """
     # Start the task set with the first element of the stream under the "spawn" key.
-    tasks = task_set(spawn=anext(stream))
+    tasks = task_set(spawn=builtins.anext(stream))
     # Event to signal that at least one buffering slot is available.
     slot_notification = asyncio.Event()
     # Set of available slot IDs (represented as integers).
@@ -327,11 +327,11 @@ async def _buffered_unordered(stream, buffer_size: int):
         return spawned_task
 
     while tasks:
-        try:
-            completion = await select(tasks)
-        except StopAsyncIteration:
-            # If the underlying stream is exhausted, continue processing remaining tasks.
+        name, result = await select(tasks)
+        if isinstance(result, StopAsyncIteration):
             continue
+
+        completion = (name, result)
 
         match completion:
             case ("spawn", spawned_task):
@@ -346,7 +346,7 @@ async def _buffered_unordered(stream, buffer_size: int):
                     # Assign the spawned task a unique slot name.
                     tasks.update(str(slot_id), spawned_task)
                     # Request the next task from the stream.
-                    tasks.update("spawn", anext(stream))
+                    tasks.update("spawn", builtins.anext(stream))
 
             case (slot_name, result):
                 # When a buffered task completes, free its slot.
@@ -367,7 +367,7 @@ class BufferedUnordered(Stream):
         self.stream = _buffered_unordered(stream, buffer_size)
 
     async def __anext__(self):
-        return await anext(self.stream)
+        return await builtins.anext(self.stream)
 
 
 async def _flatten(nested_st):
@@ -381,7 +381,7 @@ class Flatten(Stream):
         self.stream = _flatten(stream)
 
     async def __anext__(self):
-        return await anext(self.stream)
+        return await builtins.anext(self.stream)
 
 
 async def _flat_map(stream, fn):
@@ -395,7 +395,7 @@ class FlatMap(Stream):
         self.stream = _flat_map(stream, fn)
 
     async def __anext__(self):
-        return await anext(self.stream)
+        return await builtins.anext(self.stream)
 
 
 class Chunks(Stream):
@@ -407,16 +407,12 @@ class Chunks(Stream):
         chunk = []
         for _ in range(self.n):
             try:
-                chunk.append(await anext(self.stream))
+                chunk.append(await builtins.anext(self.stream))
             except StopAsyncIteration:
                 break
         if not chunk:
             raise StopAsyncIteration
         return chunk
-
-
-async def spawn(n):
-    queue = asyncio.Queue(maxsize=n)
 
 
 class ReadyChunks(Stream):
@@ -427,7 +423,7 @@ class ReadyChunks(Stream):
         self.buffer = asyncio.Queue(maxsize=n)
 
     async def push_anext(self):
-        elem = await anext(self.stream)
+        elem = await builtins.anext(self.stream)
         await self.buffer.put(elem)
 
     async def __anext__(self):
@@ -459,7 +455,7 @@ class FilterMap(Stream):
 
     async def __anext__(self):
         while True:
-            match self.fn(await anext(self.stream)):
+            match self.fn(await builtins.anext(self.stream)):
                 case None:
                     continue
                 case result:
@@ -478,7 +474,7 @@ class Chain(Stream):
         self.stream = _chain(left, right)
 
     async def __anext__(self):
-        return await anext(self.stream)
+        return await builtins.anext(self.stream)
 
 
 class Zip(Stream):
@@ -487,7 +483,7 @@ class Zip(Stream):
         self.right = right
 
     async def __anext__(self):
-        return (await anext(self.left), await anext(self.right))
+        return (await builtins.anext(self.left), await builtins.anext(self.right))
 
 
 class Switch(Stream):
@@ -498,23 +494,20 @@ class Switch(Stream):
     async def __aiter__(self):
         # Initialize a task set, with a coroutine to fetch the next item off the stream.
 
-        tasks = task_set(anext=anext(self.stream))
+        tasks = task_set(anext=builtins.anext(self.stream))
 
         while tasks:
-            try:
-                result = await select(tasks)
-            except StopAsyncIteration:
-                # We have exhausted the stream, but we need to wait for our coroutine
-                # to yield its value downstream.
+            name, res = await select(tasks)
+            if isinstance(res, StopAsyncIteration):
                 continue
 
-            match result:
+            match (name, res):
                 case ("anext", elem):
                     # A new element has come available, so cancel the pending result
                     # and schedule a new coroutine in its place
                     tasks.cancel("result")
                     tasks.update("result", self.coro(elem))
-                    tasks.update("anext", anext(self.stream))
+                    tasks.update("anext", builtins.anext(self.stream))
 
                 case ("result", result):
                     # The coroutine finished without a new item cancelling it - yield.
@@ -529,23 +522,21 @@ class Debounce(Stream):
     async def __aiter__(self):
         # Initialize a task set with tasks to get the next elem and a delay
         pending = None
-        tasks = task_set(anext=anext(self.stream), delay=asyncio.sleep(self.duration))
+        tasks = task_set(anext=builtins.anext(self.stream), delay=asyncio.sleep(self.duration))
 
         while tasks:
-            try:
-                result = await select(tasks)
-            except StopAsyncIteration:
-                # Stream is exhausted, but we still need to emit the pending elem once the delay elapses
+            name, res = await select(tasks)
+            if isinstance(res, StopAsyncIteration):
                 continue
 
-            match result:
+            match (name, res):
                 case ("anext", elem):
                     # Update the pending element with the latest item
                     pending = elem
 
                     # Push our delay further out
                     tasks.cancel("delay")
-                    tasks.update("anext", anext(self.stream))
+                    tasks.update("anext", builtins.anext(self.stream))
                     tasks.update("delay", asyncio.sleep(self.duration))
 
                 case ("delay", _):
@@ -564,7 +555,7 @@ class Once(Stream):
         self.stream = _once(value)
 
     async def __anext__(self):
-        return await anext(self.stream)
+        return await builtins.anext(self.stream)
 
 
 class Pending(Stream):
@@ -596,14 +587,14 @@ class _GenStream(Stream):
             self.gen = Iter(gen)
 
     async def __anext__(self):
-        return await anext(self.gen)
+        return await builtins.anext(self.gen)
 
 
 class StreamSet:
     def __init__(self, streams: dict[str, Stream]):
         tasks = {}
         for name, stream in streams.items():
-            tasks[name] = anext(stream)
+            tasks[name] = builtins.anext(stream)
 
         self._streams = streams
         self._task_set = task_set(**tasks)
@@ -613,7 +604,7 @@ class StreamSet:
 
     def poll_again(self, name):
         stream = self._streams[name]
-        self._task_set.update(name, anext(stream))
+        self._task_set.update(name, builtins.anext(stream))
 
     def __bool__(self):
         return bool(self._task_set)

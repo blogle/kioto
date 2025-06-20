@@ -26,27 +26,35 @@ def task_set(**tasks) -> impl.TaskSet:
     return impl.TaskSet(tasks)
 
 
-async def select(task_group: impl.TaskSet) -> Tuple[str, Any]:
+async def select(task_set: impl.TaskSet) -> Tuple[str, Any]:
     """
-    Await the first task in the TaskGroup to complete and return its result.
+    Await the first task in ``task_set`` to complete.
 
-    :param task_group: The TaskGroup containing tasks to monitor.
-    :return: A tuple of the task name and its result.
-    :raises ValueError: If the TaskGroup is empty.
-    :raises Exception: Propagates any exception raised by the completed task.
+    Returns a tuple of the task name and the result of that task. ``result`` can
+    be a normal value, an exception instance, or an ``asyncio.CancelledError`` if
+    the task was cancelled. Callers are responsible for handling the returned
+    exceptions.
+
+    :param task_set: The ``TaskSet`` containing tasks to monitor.
+    :return: ``Tuple[str, Any]`` representing the completed task and its result.
+    :raises ValueError: If ``task_set`` is empty.
     """
-    if not task_group:
-        raise ValueError("select called on an empty TaskGroup! - nothing to poll")
+    if not task_set:
+        raise ValueError("select called on an empty TaskSet! - nothing to poll")
 
     done, _ = await asyncio.wait(
-        task_group.get_tasks(), return_when=asyncio.FIRST_COMPLETED
+        task_set.get_tasks(), return_when=asyncio.FIRST_COMPLETED
     )
 
     result = None
     for task in done:
-        name = task_group.pop_task(task)
-        # Directly retrieve the result, capture exceptions for now so we can
-        # handle any other completed results and requeue them for polling
+        cancelled = False
+        if task in task_set._cancelled_tasks:
+            name = task_set._cancelled_tasks.pop(task)
+            cancelled = True
+        else:
+            name = task_set.pop_task(task)
+
         try:
             task_result = task.result()
         except Exception as e:
@@ -55,13 +63,10 @@ async def select(task_group: impl.TaskSet) -> Tuple[str, Any]:
         if result is None:
             result = (name, task_result)
         else:
-            # Re-queue the task with its result if needed
-            task_group.update(name, ready(task_result))
+            if not cancelled:
+                task_set.update(name, ready(task_result))
 
-    # If the task encountered an exception, re-raise
     name, value = result
-    if isinstance(value, Exception):
-        raise value
     return name, value
 
 

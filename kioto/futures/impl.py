@@ -5,25 +5,27 @@ from typing import Dict, Any, Optional
 class TaskSet:
     def __init__(self, tasks: Dict[str, Any]):
         """
-        Initialize the TaskGroup with a dictionary of named coroutines.
+        Initialize the TaskSet with a dictionary of named coroutines.
 
         :param tasks: A dictionary mapping task names to coroutine objects.
         """
         self._tasks = {
             name: asyncio.create_task(coro, name=name) for name, coro in tasks.items()
         }
+        # Tasks that have been cancelled but not yet awaited to completion.
+        self._cancelled_tasks: Dict[asyncio.Task, str] = {}
 
     def __bool__(self) -> bool:
         """
         Return True if there are any tasks in the group, False otherwise.
         """
-        return bool(self._tasks)
+        return bool(self._tasks) or bool(self._cancelled_tasks)
 
     def get_tasks(self):
         """
         Retrieve all active asyncio.Task instances in the group.
         """
-        return self._tasks.values()
+        return list(self._tasks.values()) + list(self._cancelled_tasks.keys())
 
     def pop_task(self, task: asyncio.Task) -> Optional[str]:
         """
@@ -57,17 +59,20 @@ class TaskSet:
         :param name: The name of the task to cancel.
         """
         task = self._tasks.pop(name, None)
-        if task and not task.done():
-            task.cancel()
+        if task:
+            if not task.done():
+                task.cancel()
+            self._cancelled_tasks[task] = name
 
     def cancel_all(self):
         """
         Cancel all active tasks in the group.
         """
-        for task in self._tasks.values():
+        for name, task in list(self._tasks.items()):
             if task and not task.done():
                 task.cancel()
-        self._tasks.clear()
+            self._cancelled_tasks[task] = name
+            del self._tasks[name]
 
 
 class Shared:

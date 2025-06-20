@@ -81,8 +81,10 @@ async def test_select_propagates_exceptions():
 
     ts = task_set(task1=coro1(), task2=coro2())
 
-    with pytest.raises(ValueError, match="An error occurred in coro1"):
-        await select(ts)
+    name, result = await select(ts)
+    assert name == "task1"
+    assert isinstance(result, ValueError)
+    assert str(result) == "An error occurred in coro1"
 
     # After exception, coro2 should still be in the TaskSet
     assert "task2" in ts._tasks
@@ -121,7 +123,12 @@ async def test_task_set_cancellation():
     ts.cancel("task1")
     assert "task1" not in ts._tasks
 
-    # Select should return task2 after 2 seconds
+    # First completion should be the cancelled task
+    name, result = await select(ts)
+    assert name == "task1"
+    assert isinstance(result, asyncio.CancelledError)
+
+    # Next completion should return task2
     name, result = await select(ts)
     assert name == "task2"
     assert result == "result2"
@@ -212,7 +219,7 @@ async def test_task_set_non_coroutine_input():
     with pytest.raises(
         ValueError, match="All arguments to task_set must be coroutine objects."
     ):
-        ts = task_set(task1="not a coroutine")
+        task_set(task1="not a coroutine")
 
 
 @pytest.mark.asyncio
@@ -238,6 +245,12 @@ async def test_task_set_partial_completion():
 
     # Now cancel task2
     ts.cancel("task2")
+    assert ts  # Cancelled task is still tracked
+
+    name2, result2 = await select(ts)
+    assert name2 == "task2"
+    assert isinstance(result2, asyncio.CancelledError)
+
     assert not ts
 
     # Attempting to select should raise ValueError
