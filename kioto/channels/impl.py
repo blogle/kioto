@@ -272,7 +272,14 @@ class OneShotSender:
         if self._channel.done():
             raise error.SenderExhausted("Value has already been sent on channel")
 
-        self._channel.set_result(value)
+        loop = self._channel.get_loop()
+
+        def setter():
+            # NOTE: This code does not work if you dont schedule as a closure. WAT!
+            self._channel.set_result(value)
+        
+        # The result must be set from the thread that owns the underlying future
+        loop.call_soon_threadsafe(setter)
 
 
 class OneShotReceiver:
