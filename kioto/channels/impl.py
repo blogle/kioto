@@ -277,7 +277,7 @@ class OneShotSender:
         def setter():
             # NOTE: This code does not work if you dont schedule as a closure. WAT!
             self._channel.set_result(value)
-        
+
         # The result must be set from the thread that owns the underlying future
         loop.call_soon_threadsafe(setter)
 
