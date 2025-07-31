@@ -2,7 +2,8 @@ import asyncio
 import pytest
 
 from kioto import streams, futures
-from kioto.channels import error, channel, channel_unbounded, oneshot_channel, watch
+from kioto.channels import error, channel, channel_unbounded, oneshot_channel, watch, spsc_buffer
+from kioto.channels.impl import BorrowedSlice
 
 
 @pytest.mark.asyncio
@@ -470,3 +471,474 @@ async def test_watch_channel_cancel():
 
     tx.send(2)
     assert rx.borrow_and_update() == 2
+
+
+# SPSC Buffer Tests
+
+def test_spsc_buffer_basic_send_recv():
+    """Test basic synchronous send and receive operations."""
+    tx, rx = spsc_buffer(1024)
+
+    # Send some data
+    data = b"hello world"
+    sent = tx.send(data)
+    assert sent == len(data)
+
+    # Receive the data
+    received = rx.recv(len(data))
+    assert received == data
+
+
+def test_spsc_buffer_capacity_rounding():
+    """Test that capacity is rounded to nearest power of 2."""
+    tx, rx = spsc_buffer(1000)  # Should round to 1024
+
+    # Fill the buffer completely
+    data = b"x" * 1024
+    sent = tx.send(data)
+    assert sent == 1024
+
+    # Buffer should be full now
+    more_data = b"y"
+    sent = tx.send(more_data)
+    assert sent == 0  # Nothing should be sent
+
+
+def test_spsc_buffer_partial_send():
+    """Test partial sends when buffer is nearly full."""
+    tx, rx = spsc_buffer(16)
+
+    # Fill most of the buffer
+    data1 = b"x" * 10
+    sent = tx.send(data1)
+    assert sent == 10
+
+    # Try to send more than remaining space
+    data2 = b"y" * 10
+    sent = tx.send(data2)
+    assert sent == 6  # Only 6 bytes should fit
+
+    # Receive some data to make space
+    received = rx.recv(5)
+    assert received == b"x" * 5
+
+    # Now we can send more
+    data3 = b"z" * 5
+    sent = tx.send(data3)
+    assert sent == 5
+
+
+def test_spsc_buffer_wraparound():
+    """Test buffer wraparound functionality."""
+    tx, rx = spsc_buffer(8)
+
+    # Fill buffer
+    data1 = b"12345678"
+    sent = tx.send(data1)
+    assert sent == 8
+
+    # Read part of it
+    received = rx.recv(4)
+    assert received == b"1234"
+
+    # Send more data (should wrap around)
+    data2 = b"abcd"
+    sent = tx.send(data2)
+    assert sent == 4
+
+    # Read remaining original data
+    received = rx.recv(4)
+    assert received == b"5678"
+
+    # Read the wrapped data
+    received = rx.recv(4)
+    assert received == b"abcd"
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_async_send():
+    """Test asynchronous send operations."""
+    tx, rx = spsc_buffer(8)
+
+    # Fill buffer
+    await tx.send_async(b"12345678")
+
+    # Start async send that will block
+    send_task = asyncio.create_task(tx.send_async(b"abcd"))
+    await asyncio.sleep(0.01)  # Let it try to send
+
+    # Read some data to unblock sender
+    received = rx.recv(4)
+    assert received == b"1234"
+
+    # Wait for async send to complete
+    await send_task
+
+    # Verify all data is correct
+    received = rx.recv(8)
+    assert received == b"5678abcd"
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_recv_into():
+    """Test recv_into functionality."""
+    tx, rx = spsc_buffer(16)
+
+    # Send some data
+    await tx.send_async(b"hello world")
+
+    # Receive into a buffer
+    out_buffer = bytearray(5)
+    copied = await rx.recv_into(out_buffer)
+    assert copied == 5
+    assert out_buffer == b"hello"
+
+    # Receive remaining data
+    out_buffer = bytearray(10)
+    copied = await rx.recv_into(out_buffer)
+    assert copied == 6
+    assert out_buffer[:6] == b" world"
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_wait_for():
+    """Test wait_for functionality."""
+    tx, rx = spsc_buffer(16)
+
+    # Start waiting for data
+    wait_task = asyncio.create_task(rx.wait_for(5))
+    await asyncio.sleep(0.01)
+
+    # Send enough data
+    await tx.send_async(b"hello")
+
+    # Wait should complete
+    await wait_task
+
+    # Verify data is available
+    data = rx.recv(5)
+    assert data == b"hello"
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_wait_for_deadlock_prevention():
+    """Test that wait_for prevents deadlock by capping at buffer capacity."""
+    tx, rx = spsc_buffer(8)
+
+    # Try to wait for more data than buffer capacity
+    wait_task = asyncio.create_task(rx.wait_for(16))  # Buffer only holds 8
+    await asyncio.sleep(0.01)
+
+    # Send data up to capacity
+    await tx.send_async(b"12345678")
+
+    # Wait should complete even though we asked for 16 bytes
+    await wait_task
+
+
+def test_spsc_buffer_single_sender_enforcement():
+    """Test that only one sender is allowed."""
+    tx, rx = spsc_buffer(16)
+    ctr = type(tx)
+
+    # Try to create another sender
+    with pytest.raises(RuntimeError, match="Only one sender allowed"):
+        ctr(tx._buffer)
+
+
+def test_spsc_buffer_single_receiver_enforcement():
+    """Test that only one receiver is allowed."""
+    tx, rx = spsc_buffer(16)
+    ctr = type(rx)
+
+    # Try to create another receiver
+    with pytest.raises(RuntimeError, match="Only one receiver allowed"):
+        ctr(rx._buffer)
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_sender_dropped():
+    """Test behavior when sender is dropped."""
+    import gc
+    tx, rx = spsc_buffer(16)
+
+    # Send some data
+    await tx.send_async(b"hello")
+
+    # Drop sender
+    del tx
+    gc.collect()  # Force garbage collection to trigger weakref callback
+    await asyncio.sleep(0.01)  # Give callback time to execute
+
+    # Should be able to read existing data
+    data = rx.recv(5)
+    assert data == b"hello"
+
+    # But waiting for more should fail
+    with pytest.raises(error.SendersDisconnected):
+        await rx.wait_for(1)
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_receiver_dropped():
+    """Test behavior when receiver is dropped."""
+    import gc
+    tx, rx = spsc_buffer(16)
+
+    # Drop receiver
+    del rx
+    gc.collect()  # Force garbage collection to trigger weakref callback
+    await asyncio.sleep(0.01)  # Give callback time to execute
+
+    # Sending should fail
+    with pytest.raises(error.ReceiversDisconnected):
+        tx.send(b"hello")
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_sender_sink():
+    """Test sender sink functionality."""
+    tx, rx = spsc_buffer(16)
+    sink = tx.into_sink()
+
+    # Send data through sink
+    await sink.feed(b"hello")
+    await sink.send(b" world")
+
+    # Read data
+    data = rx.recv(11)
+    assert data == b"hello world"
+
+    # Close sink
+    await sink.close()
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_receiver_stream():
+    """Test receiver stream functionality."""
+    tx, rx = spsc_buffer(64)
+    stream = rx.into_stream(buffer_size=8, min_size=2)
+
+    # Send data
+    await tx.send_async(b"hello world test data")
+
+    # Read through stream
+    chunk1 = await anext(stream)
+    assert len(chunk1) <= 8  # Should respect buffer size
+
+    chunk2 = await anext(stream)
+    assert len(chunk2) <= 8
+
+    # Close sender
+    del tx
+
+    # Stream should eventually end
+    with pytest.raises(StopAsyncIteration):
+        while True:
+            await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_notify_methods():
+    """Test notify and wait methods."""
+    tx, rx = spsc_buffer(8)
+
+    # Start a receiver waiting
+    wait_task = asyncio.create_task(rx.wait_for(1))
+    await asyncio.sleep(0.01)
+
+    # Send data and notify
+    tx.send(b"x")
+    tx.notify_reader()
+
+    # Wait should complete
+    await wait_task
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_concurrent_operations():
+    """Test concurrent send and receive operations."""
+    tx, rx = spsc_buffer(16)
+
+    async def sender():
+        for i in range(10):
+            await tx.send_async(f"msg{i:02d}".encode())
+            await asyncio.sleep(0.001)
+
+    async def receiver():
+        messages = []
+        for _ in range(10):
+            await rx.wait_for(5)  # Wait for message
+            data = rx.recv(5)
+            messages.append(data.decode())
+        return messages
+
+    # Run sender and receiver concurrently
+    sender_task = asyncio.create_task(sender())
+    receiver_task = asyncio.create_task(receiver())
+
+    messages = await receiver_task
+    await sender_task
+
+    # Verify all messages received correctly
+    expected = [f"msg{i:02d}" for i in range(10)]
+    assert messages == expected
+
+
+# BorrowedSlice and Zero-Copy Stream Tests
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_receiver_stream_borrowed_slice():
+    """Test receiver stream returns BorrowedSlice for zero-copy access."""
+
+    tx, rx = spsc_buffer(64)
+    stream = rx.into_stream(buffer_size=8, min_size=2)
+
+    # Send some data
+    await tx.send_async(b"hello world")
+
+    # Get borrowed slice
+    borrowed = await anext(stream)
+    assert len(borrowed) <= 8  # Should respect buffer size
+
+    # Can read from borrowed slice without copying
+    assert borrowed[0] in [ord('h'), ord(' ')]  # Could be start of either word
+    assert len(borrowed) >= 2  # Should respect min_size
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_borrowed_slice_clone():
+    """Test that BorrowedSlice.clone() creates owned copy."""
+
+    tx, rx = spsc_buffer(64)
+    stream = rx.into_stream(buffer_size=16, min_size=1)
+
+    # Send data
+    await tx.send_async(b"test data")
+
+    # Get borrowed slice and clone it
+    borrowed = await anext(stream)
+    owned = borrowed.clone()
+
+    # Owned copy should be bytes
+    assert isinstance(owned, bytes)
+    assert b"test" in owned or b"data" in owned
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_borrowed_slice_invalidation():
+    """Test that BorrowedSlice is invalidated on next anext call."""
+
+    tx, rx = spsc_buffer(64)
+    stream = rx.into_stream(buffer_size=8, min_size=1)
+
+    # Send data in chunks
+    await tx.send_async(b"first")
+    await tx.send_async(b"second")
+
+    # Get first borrowed slice
+    first_borrowed = await anext(stream)
+    assert isinstance(first_borrowed, BorrowedSlice)
+
+    # Accessing first slice should work
+    _ = len(first_borrowed)
+
+    # Get second borrowed slice - this should invalidate the first
+    second_borrowed = await anext(stream)
+    assert isinstance(second_borrowed, BorrowedSlice)
+
+    # Now accessing first slice should raise exception
+    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
+        _ = len(first_borrowed)
+
+    # Second slice should still be valid
+    _ = len(second_borrowed)
+
+
+@pytest.mark.asyncio
+async def test_spsc_buffer_borrowed_slice_clone_persistence():
+    """Test that cloned data persists after invalidation."""
+
+    tx, rx = spsc_buffer(64)
+    stream = rx.into_stream(buffer_size=8, min_size=1)
+
+    # Send data
+    await tx.send_async(b"persistent")
+    await tx.send_async(b"data")
+
+    # Get first slice and clone it
+    first_borrowed = await anext(stream)
+    owned_copy = first_borrowed.clone()
+
+    # Get second slice (invalidates first)
+    second_borrowed = await anext(stream)
+
+    # Original borrowed slice should be invalid
+    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
+        _ = len(first_borrowed)
+
+    # But owned copy should still be accessible
+    assert isinstance(owned_copy, bytes)
+    assert len(owned_copy) > 0
+
+
+def test_borrowed_slice_methods():
+    """Test BorrowedSlice slice-like methods."""
+    tx, rx = spsc_buffer(64)
+
+    # Create a borrowed slice from some data
+    data = b"hello world"
+    view = memoryview(data)
+    borrowed = BorrowedSlice(view)
+
+    # Test slice-like operations
+    assert len(borrowed) == 11
+    assert borrowed[0] == ord('h')
+    assert borrowed[6] == ord('w')
+
+    # Test slice methods
+    assert borrowed.startswith(b"hello")
+    assert borrowed.endswith(b"world")
+    assert borrowed.find(b"world") == 6
+    assert borrowed.decode() == "hello world"
+
+    # Test iteration
+    chars = list(borrowed)
+    assert chars[0] == ord('h')
+
+    # Test equality
+    assert borrowed == b"hello world"
+
+    # Test conversion to bytes
+    assert bytes(borrowed) == b"hello world"
+
+
+def test_borrowed_slice_invalidation():
+    """Test BorrowedSlice invalidation behavior."""
+
+    data = b"test data"
+    view = memoryview(data)
+    borrowed = BorrowedSlice(view)
+
+    # Should work initially
+    assert len(borrowed) == 9
+    assert borrowed[0] == ord('t')
+
+    # Invalidate
+    borrowed.invalidate()
+
+    # All operations should now raise exceptions
+    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
+        len(borrowed)
+
+    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
+        borrowed[0]
+
+    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
+        borrowed.clone()
+
+    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
+        borrowed.startswith(b"test")
+
+    # Repr should indicate invalidation
+    assert "invalidated" in str(borrowed)

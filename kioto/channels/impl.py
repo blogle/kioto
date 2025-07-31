@@ -11,6 +11,78 @@ from kioto.sink import Sink
 from . import error
 
 
+class BorrowedSlice:
+    """
+    A wrapper around a slice that can be invalidated to prevent use-after-mutation.
+    Provides zero-copy access with explicit ownership semantics.
+    """
+
+    def __init__(self, data: memoryview):
+        self._data = data
+        self._valid = True
+
+    def invalidate(self):
+        """Invalidate this borrowed slice, making it unusable."""
+        self._valid = False
+        self._data = None
+
+    def clone(self) -> bytes:
+        """Take ownership by copying the data."""
+        if not self._valid:
+            raise RuntimeError("Borrowed slice has been invalidated")
+        return bytes(self._data)
+
+    def _check_valid(self):
+        """Check if this slice is still valid."""
+        if not self._valid:
+            raise RuntimeError("Borrowed slice has been invalidated")
+
+    def __getitem__(self, key):
+        self._check_valid()
+        return self._data[key]
+
+    def __len__(self):
+        self._check_valid()
+        return len(self._data)
+
+    def __iter__(self):
+        self._check_valid()
+        return iter(self._data)
+
+    def __bytes__(self):
+        """Convert to bytes (creates a copy)."""
+        return self.clone()
+
+    def __eq__(self, other):
+        self._check_valid()
+        if isinstance(other, BorrowedSlice):
+            other._check_valid()
+            return self._data == other._data
+        return self._data == other
+
+    def __repr__(self):
+        if not self._valid:
+            return "BorrowedSlice(invalidated)"
+        return f"BorrowedSlice({len(self._data)} bytes)"
+
+    # Slice-like methods
+    def startswith(self, prefix):
+        self._check_valid()
+        return bytes(self._data).startswith(prefix)
+
+    def endswith(self, suffix):
+        self._check_valid()
+        return bytes(self._data).endswith(suffix)
+
+    def find(self, sub):
+        self._check_valid()
+        return bytes(self._data).find(sub)
+
+    def decode(self, encoding='utf-8', errors='strict'):
+        self._check_valid()
+        return bytes(self._data).decode(encoding, errors)
+
+
 def notify_one(waiters):
     if waiters:
         tx = waiters.pop()
@@ -34,6 +106,395 @@ def wait_for_notice(waiters):
     waiters.append(sender)
 
     return receiver()
+
+
+def round_to_power_of_2(n: int) -> int:
+    """Round up to the nearest power of 2."""
+    if n <= 0:
+        return 1
+    if n & (n - 1) == 0:  # already power of 2
+        return n
+
+    # Find the next power of 2
+    power = 1
+    while power < n:
+        power <<= 1
+    return power
+
+
+class SPSCBuffer:
+    """
+    Single Producer Single Consumer lock-free buffer for bytes.
+    """
+
+    def __init__(self, capacity: int):
+        # Round capacity to power of 2 for optimization
+        self._capacity = round_to_power_of_2(capacity)
+        self._mask = self._capacity - 1  # For fast modulo with bitmask
+
+        # Circular buffer
+        self._buffer = bytearray(self._capacity)
+
+        # Head and tail pointers (atomically updated)
+        self._head = 0  # Reader position
+        self._tail = 0  # Writer position
+
+        # Tracking sender/receiver instances (weak references only)
+        self._sender_ref = None
+        self._receiver_ref = None
+
+        # Async notification - single waiter per side for SPSC
+        self._reader_waiter = None
+        self._writer_waiter = None
+
+        self._lock = threading.Lock()
+
+    def _available_space(self) -> int:
+        """Get available space for writing."""
+        return self._capacity - self._size()
+
+    def _size(self) -> int:
+        """Get current number of bytes in buffer."""
+        return (self._tail - self._head) & ((2 * self._capacity) - 1)
+
+    def _register_sender(self, sender: "SPSCSender"):
+        """Register a sender, ensuring only one exists."""
+        if self._sender_ref is not None:
+            raise RuntimeError("Only one sender allowed in SPSC buffer")
+
+        self._sender_ref = weakref.ref(sender, self._sender_dropped)
+
+    def _register_receiver(self, receiver: "SPSCReceiver"):
+        """Register a receiver, ensuring only one exists."""
+        if self._receiver_ref is not None:
+            raise RuntimeError("Only one receiver allowed in SPSC buffer")
+
+        self._receiver_ref = weakref.ref(receiver, self._receiver_dropped)
+
+    def _sender_dropped(self, ref):
+        """Called when sender is garbage collected."""
+        self._sender_ref = None
+        if self._reader_waiter is not None:
+            self._reader_waiter.send(())
+            self._reader_waiter = None
+
+    def _receiver_dropped(self, ref):
+        """Called when receiver is garbage collected."""
+        self._receiver_ref = None
+        if self._writer_waiter is not None:
+            self._writer_waiter.send(())
+            self._writer_waiter = None
+
+    def _has_sender(self) -> bool:
+        return self._sender_ref is not None
+
+    def _has_receiver(self) -> bool:
+        return self._receiver_ref is not None
+
+    def _push_bytes(self, data: bytes) -> int:
+        """
+        Push bytes to buffer, returns number of bytes successfully written.
+        This is lock-free for the sender.
+        """
+        if not self._has_receiver():
+            raise error.ReceiversDisconnected
+
+        available = self._available_space()
+        to_write = min(len(data), available)
+
+        if to_write == 0:
+            return 0
+
+        # Write data to circular buffer
+        tail_pos = self._tail & self._mask
+
+        if tail_pos + to_write <= self._capacity:
+            # No wrap around
+            self._buffer[tail_pos:tail_pos + to_write] = data[:to_write]
+        else:
+            # Handle wrap around
+            first_part = self._capacity - tail_pos
+            self._buffer[tail_pos:] = data[:first_part]
+            self._buffer[:to_write - first_part] = data[first_part:to_write]
+
+        # Update tail atomically
+        self._tail = (self._tail + to_write) & ((2 * self._capacity) - 1)
+
+        return to_write
+
+    def _pop_bytes(self, size: int) -> bytes:
+        """
+        Pop bytes from buffer, returns up to size bytes.
+        This is lock-free for the receiver.
+        """
+        if not self._has_sender() and self._size() == 0:
+            raise error.SendersDisconnected
+
+        available = self._size()
+        to_read = min(size, available)
+
+        if to_read == 0:
+            return b""
+
+        # Read data from circular buffer
+        head_pos = self._head & self._mask
+
+        if head_pos + to_read <= self._capacity:
+            # No wrap around
+            result = bytes(self._buffer[head_pos:head_pos + to_read])
+        else:
+            # Handle wrap around
+            first_part = self._capacity - head_pos
+            result = bytes(self._buffer[head_pos:] + self._buffer[:to_read - first_part])
+
+        # Update head atomically
+        self._head = (self._head + to_read) & ((2 * self._capacity) - 1)
+
+        return result
+
+    def _pop_into(self, out: bytearray) -> int:
+        """
+        Pop bytes into existing buffer, returns number of bytes copied.
+        This is lock-free for the receiver.
+        """
+        if not self._has_sender() and self._size() == 0:
+            raise error.SendersDisconnected
+
+        available = self._size()
+        to_read = min(len(out), available)
+
+        if to_read == 0:
+            return 0
+
+        # Read data from circular buffer into output buffer
+        head_pos = self._head & self._mask
+
+        if head_pos + to_read <= self._capacity:
+            # No wrap around
+            out[:to_read] = self._buffer[head_pos:head_pos + to_read]
+        else:
+            # Handle wrap around
+            first_part = self._capacity - head_pos
+            out[:first_part] = self._buffer[head_pos:]
+            out[first_part:to_read] = self._buffer[:to_read - first_part]
+
+        # Update head atomically
+        self._head = (self._head + to_read) & ((2 * self._capacity) - 1)
+
+        return to_read
+
+    def _notify_reader(self):
+        """Notify waiting reader that data is available."""
+        if self._reader_waiter is not None:
+            self._reader_waiter.send(())
+            self._reader_waiter = None
+
+    def _notify_writer(self):
+        """Notify waiting writer that space is available."""
+        if self._writer_waiter is not None:
+            self._writer_waiter.send(())
+            self._writer_waiter = None
+
+    async def _wait_for_reader(self):
+        """Wait for reader to consume data."""
+        if self._writer_waiter is not None:
+            raise RuntimeError("Only one writer can wait at a time in SPSC buffer")
+
+        # Create a oneshot channel
+        channel = OneShotChannel()
+        sender = OneShotSender(channel)
+        receiver = OneShotReceiver(channel)
+
+        # Store the sender as our waiter
+        self._writer_waiter = sender
+
+        try:
+            await receiver()
+        finally:
+            # Clean up waiter if it's still ours
+            if self._writer_waiter is sender:
+                self._writer_waiter = None
+
+    async def _wait_for_writer(self):
+        """Wait for writer to produce data."""
+        if self._reader_waiter is not None:
+            raise RuntimeError("Only one reader can wait at a time in SPSC buffer")
+
+        # Create a oneshot channel
+        channel = OneShotChannel()
+        sender = OneShotSender(channel)
+        receiver = OneShotReceiver(channel)
+
+        # Store the sender as our waiter
+        self._reader_waiter = sender
+
+        try:
+            await receiver()
+        finally:
+            # Clean up waiter if it's still ours
+            if self._reader_waiter is sender:
+                self._reader_waiter = None
+
+
+class SPSCSender:
+    """
+    Single Producer sender for SPSC buffer.
+    """
+
+    def __init__(self, buffer: SPSCBuffer):
+        self._buffer = buffer
+        self._buffer._register_sender(self)
+
+    def send(self, data: bytes) -> int:
+        """
+        Send data synchronously, returns number of bytes successfully written.
+        """
+        return self._buffer._push_bytes(data)
+
+    def notify_reader(self):
+        """Notify pending readers that there is data available."""
+        self._buffer._notify_reader()
+
+    async def wait_for_reader(self):
+        """Wait for reader to consume data."""
+        await self._buffer._wait_for_reader()
+
+    async def send_async(self, data: bytes):
+        """
+        Send data asynchronously, will wait for space if needed.
+        """
+        remaining_data = data
+
+        while remaining_data:
+            # Try to send what we can
+            written = self._buffer._push_bytes(remaining_data)
+
+            if written > 0:
+                # Alert pending readers that there is data available
+                self._buffer._notify_reader()
+                remaining_data = remaining_data[written:]
+
+            if remaining_data:
+                # Wait for reader to clear more space in the buffer
+                await self._buffer._wait_for_reader()
+
+    def into_sink(self) -> "SPSCSenderSink":
+        """Convert this sender into a sink."""
+        return SPSCSenderSink(self)
+
+
+class SPSCReceiver:
+    """
+    Single Consumer receiver for SPSC buffer.
+    """
+
+    def __init__(self, buffer: SPSCBuffer):
+        self._buffer = buffer
+        self._buffer._register_receiver(self)
+
+    def recv(self, size: int) -> bytes:
+        """
+        Receive up to size bytes synchronously.
+        """
+        result = self._buffer._pop_bytes(size)
+        if result:
+            self._buffer._notify_writer()
+        return result
+
+    async def recv_into(self, out: bytearray) -> int:
+        """
+        Receive data into existing buffer asynchronously.
+        Returns number of bytes copied.
+        """
+        copied = self._buffer._pop_into(out)
+        if copied > 0:
+            self._buffer._notify_writer()
+        return copied
+
+    async def wait_for(self, size: int):
+        """
+        Wait until at least size bytes are available.
+        Prevents deadlock by capping at buffer capacity.
+        """
+        # Prevent deadlock by limiting to buffer capacity
+        target_size = min(size, self._buffer._capacity)
+
+        while self._buffer._size() < target_size:
+            if not self._buffer._has_sender():
+                raise error.SendersDisconnected
+            await self._buffer._wait_for_writer()
+
+    def into_stream(self, buffer_size: int = 8192, min_size: int = 1) -> "SPSCReceiverStream":
+        """Convert this receiver into a stream."""
+        return SPSCReceiverStream(self, buffer_size, min_size)
+
+
+class SPSCSenderSink(Sink):
+    """
+    Sink implementation wrapping SPSCSender.
+    """
+
+    def __init__(self, sender: SPSCSender):
+        self._sender = sender
+        self._closed = False
+
+    async def feed(self, item: bytes):
+        if self._closed:
+            raise error.SenderSinkClosed
+        await self._sender.send_async(item)
+
+    async def send(self, item: bytes):
+        if self._closed:
+            raise error.SenderSinkClosed
+        await self._sender.send_async(item)
+
+    async def flush(self):
+        if self._closed:
+            raise error.SenderSinkClosed
+        # For SPSC buffer, flush is effectively a no-op since sends are immediate
+
+    async def close(self):
+        if not self._closed:
+            del self._sender
+            self._closed = True
+
+
+class SPSCReceiverStream(Stream):
+    """
+    Stream implementation wrapping SPSCReceiver.
+    Provides zero-copy access through BorrowedSlice with explicit ownership semantics.
+    """
+
+    def __init__(self, receiver: SPSCReceiver, buffer_size: int = 8192, min_size: int = 1):
+        self._receiver = receiver
+        self._buffer_size = buffer_size
+        self._min_size = min_size
+        self._internal_buffer = bytearray(buffer_size)
+        self._last_borrow = None  # Track the last borrowed slice
+
+    async def __anext__(self):
+        try:
+            # Invalidate the previous borrow to prevent use-after-mutation
+            if self._last_borrow is not None:
+                self._last_borrow.invalidate()
+                self._last_borrow = None
+
+            # Wait for minimum data
+            await self._receiver.wait_for(self._min_size)
+
+            # Read into internal buffer
+            n_bytes = await self._receiver.recv_into(self._internal_buffer)
+
+            if n_bytes == 0:
+                raise StopAsyncIteration
+
+            # Create a zero-copy borrowed slice
+            slice_view = memoryview(self._internal_buffer)[:n_bytes]
+            self._last_borrow = BorrowedSlice(slice_view)
+            return self._last_borrow
+
+        except error.SendersDisconnected:
+            raise StopAsyncIteration
 
 
 class Channel:
