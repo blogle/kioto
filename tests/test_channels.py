@@ -2,7 +2,14 @@ import asyncio
 import pytest
 
 from kioto import streams, futures
-from kioto.channels import error, channel, channel_unbounded, oneshot_channel, watch, spsc_buffer
+from kioto.channels import (
+    error,
+    channel,
+    channel_unbounded,
+    oneshot_channel,
+    watch,
+    spsc_buffer,
+)
 from kioto.channels.impl import BorrowedSlice
 
 
@@ -475,6 +482,7 @@ async def test_watch_channel_cancel():
 
 # SPSC Buffer Tests
 
+
 def test_spsc_buffer_basic_send_recv():
     """Test basic synchronous send and receive operations."""
     tx, rx = spsc_buffer(1024)
@@ -660,6 +668,7 @@ def test_spsc_buffer_single_receiver_enforcement():
 async def test_spsc_buffer_sender_dropped():
     """Test behavior when sender is dropped."""
     import gc
+
     tx, rx = spsc_buffer(16)
 
     # Send some data
@@ -683,6 +692,7 @@ async def test_spsc_buffer_sender_dropped():
 async def test_spsc_buffer_receiver_dropped():
     """Test behavior when receiver is dropped."""
     import gc
+
     tx, rx = spsc_buffer(16)
 
     # Drop receiver
@@ -787,6 +797,7 @@ async def test_spsc_buffer_concurrent_operations():
 
 # BorrowedSlice and Zero-Copy Stream Tests
 
+
 @pytest.mark.asyncio
 async def test_spsc_buffer_receiver_stream_borrowed_slice():
     """Test receiver stream returns BorrowedSlice for zero-copy access."""
@@ -802,7 +813,7 @@ async def test_spsc_buffer_receiver_stream_borrowed_slice():
     assert len(borrowed) <= 8  # Should respect buffer size
 
     # Can read from borrowed slice without copying
-    assert borrowed[0] in [ord('h'), ord(' ')]  # Could be start of either word
+    assert borrowed[0] in [ord("h"), ord(" ")]  # Could be start of either word
     assert len(borrowed) >= 2  # Should respect min_size
 
 
@@ -893,8 +904,8 @@ def test_borrowed_slice_methods():
 
     # Test slice-like operations
     assert len(borrowed) == 11
-    assert borrowed[0] == ord('h')
-    assert borrowed[6] == ord('w')
+    assert borrowed[0] == ord("h")
+    assert borrowed[6] == ord("w")
 
     # Test slice methods
     assert borrowed.startswith(b"hello")
@@ -904,7 +915,7 @@ def test_borrowed_slice_methods():
 
     # Test iteration
     chars = list(borrowed)
-    assert chars[0] == ord('h')
+    assert chars[0] == ord("h")
 
     # Test equality
     assert borrowed == b"hello world"
@@ -922,7 +933,7 @@ def test_borrowed_slice_invalidation():
 
     # Should work initially
     assert len(borrowed) == 9
-    assert borrowed[0] == ord('t')
+    assert borrowed[0] == ord("t")
 
     # Invalidate
     borrowed.invalidate()

@@ -78,7 +78,7 @@ class BorrowedSlice:
         self._check_valid()
         return bytes(self._data).find(sub)
 
-    def decode(self, encoding='utf-8', errors='strict'):
+    def decode(self, encoding="utf-8", errors="strict"):
         self._check_valid()
         return bytes(self._data).decode(encoding, errors)
 
@@ -210,12 +210,12 @@ class SPSCBuffer:
 
         if tail_pos + to_write <= self._capacity:
             # No wrap around
-            self._buffer[tail_pos:tail_pos + to_write] = data[:to_write]
+            self._buffer[tail_pos : tail_pos + to_write] = data[:to_write]
         else:
             # Handle wrap around
             first_part = self._capacity - tail_pos
             self._buffer[tail_pos:] = data[:first_part]
-            self._buffer[:to_write - first_part] = data[first_part:to_write]
+            self._buffer[: to_write - first_part] = data[first_part:to_write]
 
         # Update tail atomically
         self._tail = (self._tail + to_write) & ((2 * self._capacity) - 1)
@@ -241,11 +241,11 @@ class SPSCBuffer:
 
         if head_pos + to_read <= self._capacity:
             # No wrap around
-            result = bytes(self._buffer[head_pos:head_pos + to_read])
+            result = bytes(self._buffer[head_pos : head_pos + to_read])
         else:
             # Handle wrap around
             first_part = self._capacity - head_pos
-            result = bytes(self._buffer[head_pos:] + self._buffer[:to_read - first_part])
+            result = bytes(self._buffer[head_pos:] + self._buffer[: to_read - first_part])
 
         # Update head atomically
         self._head = (self._head + to_read) & ((2 * self._capacity) - 1)
@@ -271,12 +271,12 @@ class SPSCBuffer:
 
         if head_pos + to_read <= self._capacity:
             # No wrap around
-            out[:to_read] = self._buffer[head_pos:head_pos + to_read]
+            out[:to_read] = self._buffer[head_pos : head_pos + to_read]
         else:
             # Handle wrap around
             first_part = self._capacity - head_pos
             out[:first_part] = self._buffer[head_pos:]
-            out[first_part:to_read] = self._buffer[:to_read - first_part]
+            out[first_part:to_read] = self._buffer[: to_read - first_part]
 
         # Update head atomically
         self._head = (self._head + to_read) & ((2 * self._capacity) - 1)
@@ -424,7 +424,9 @@ class SPSCReceiver:
                 raise error.SendersDisconnected
             await self._buffer._wait_for_writer()
 
-    def into_stream(self, buffer_size: int = 8192, min_size: int = 1) -> "SPSCReceiverStream":
+    def into_stream(
+        self, buffer_size: int = 8192, min_size: int = 1
+    ) -> "SPSCReceiverStream":
         """Convert this receiver into a stream."""
         return SPSCReceiverStream(self, buffer_size, min_size)
 
@@ -465,7 +467,9 @@ class SPSCReceiverStream(Stream):
     Provides zero-copy access through BorrowedSlice with explicit ownership semantics.
     """
 
-    def __init__(self, receiver: SPSCReceiver, buffer_size: int = 8192, min_size: int = 1):
+    def __init__(
+        self, receiver: SPSCReceiver, buffer_size: int = 8192, min_size: int = 1
+    ):
         self._receiver = receiver
         self._buffer_size = buffer_size
         self._min_size = min_size
