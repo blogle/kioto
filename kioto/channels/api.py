@@ -28,3 +28,19 @@ def watch(initial_value: Any) -> tuple[impl.WatchSender, impl.WatchReceiver]:
     sender = impl.WatchSender(channel)
     receiver = impl.WatchReceiver(channel)
     return sender, receiver
+
+
+def spsc_buffer(capacity: int) -> tuple[impl.SPSCSender, impl.SPSCReceiver]:
+    """
+    Create a Single Producer Single Consumer buffer for bytes.
+
+    Args:
+        capacity: Buffer capacity in bytes (will be rounded up to nearest power of 2)
+
+    Returns:
+        A tuple of (sender, receiver) for the SPSC buffer
+    """
+    buffer = impl.SPSCBuffer(capacity)
+    sender = impl.SPSCSender(buffer)
+    receiver = impl.SPSCReceiver(buffer)
+    return sender, receiver
