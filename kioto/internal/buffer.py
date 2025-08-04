@@ -30,7 +30,7 @@ class BufferPool:
         self._max_pool_size = max_pool_size
         self._available = []  # Available buffers ready for reuse
 
-    def get_buffer(self) -> 'ManagedBuffer':
+    def get_buffer(self) -> "ManagedBuffer":
         """
         Get a buffer from pool, allocating new one if pool is empty.
 
@@ -116,5 +116,5 @@ class ManagedBuffer:
 
     def __release_buffer__(self, view):
         """Release buffer protocol view."""
-        if hasattr(self._buffer, '__release_buffer__'):
+        if hasattr(self._buffer, "__release_buffer__"):
             self._buffer.__release_buffer__(view)

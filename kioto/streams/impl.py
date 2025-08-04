@@ -1,6 +1,5 @@
 import asyncio
 import builtins
-import collections
 
 from kioto.futures import pending, select, task_set
 from kioto.internal.queue import SlotQueue

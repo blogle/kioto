@@ -10,7 +10,6 @@ from kioto.channels import (
     watch,
     spsc_buffer,
 )
-from kioto.internal.buffer import ManagedBuffer
 
 
 @pytest.mark.asyncio

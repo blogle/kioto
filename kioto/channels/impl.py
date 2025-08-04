@@ -7,12 +7,9 @@ from typing import Any, Callable
 
 from kioto.streams import Stream
 from kioto.sink import Sink
-from kioto.internal.buffer import BufferPool, ManagedBuffer
+from kioto.internal.buffer import BufferPool
 
 from . import error
-
-
-
 
 
 def notify_one(waiters):
@@ -177,7 +174,9 @@ class SPSCBuffer:
         else:
             # Handle wrap around
             first_part = self._capacity - head_pos
-            result = bytearray(self._buffer[head_pos:] + self._buffer[: to_read - first_part])
+            result = bytearray(
+                self._buffer[head_pos:] + self._buffer[: to_read - first_part]
+            )
 
         # Update head atomically
         self._head = (self._head + to_read) & ((2 * self._capacity) - 1)
@@ -403,7 +402,11 @@ class SPSCReceiverStream(Stream):
     """
 
     def __init__(
-        self, receiver: SPSCReceiver, buffer_size: int = 8192, min_size: int = 1, pool_size: int = 10
+        self,
+        receiver: SPSCReceiver,
+        buffer_size: int = 8192,
+        min_size: int = 1,
+        pool_size: int = 10,
     ):
         self._receiver = receiver
         self._min_size = min_size

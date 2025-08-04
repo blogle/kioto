@@ -1,5 +1,4 @@
 import pytest
-import weakref
 import gc
 from kioto.internal.buffer import BufferPool, ManagedBuffer
 
@@ -30,7 +29,7 @@ def test_managed_buffer_view():
 
     # Fill with test data
     test_data = b"hello world"
-    buffer._buffer[:len(test_data)] = test_data
+    buffer._buffer[: len(test_data)] = test_data
 
     # Test full view
     view = buffer.view()
@@ -52,7 +51,7 @@ def test_buffer_pool_reuse():
 
     # Get buffer and modify it
     buffer1 = pool.get_buffer()
-    buffer1._buffer[0] = ord('x')
+    buffer1._buffer[0] = ord("x")
 
     # Get ID for later comparison
     buffer1_id = id(buffer1._buffer)
@@ -95,7 +94,7 @@ def test_managed_buffer_buffer_protocol():
 
     # Fill with test data
     test_data = b"hello"
-    buffer._buffer[:len(test_data)] = test_data
+    buffer._buffer[: len(test_data)] = test_data
 
     # Test buffer protocol via memoryview construction
     mv = memoryview(buffer)
