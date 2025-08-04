@@ -814,11 +814,12 @@ async def test_spsc_buffer_receiver_stream_managed_buffer():
     chunk = await anext(stream)
     assert isinstance(chunk, memoryview)
     assert len(chunk) <= 8  # Should respect buffer size
+    assert len(chunk) >= 2  # Should respect min_size
 
     # Can read from memoryview without copying
     chunk_bytes = bytes(chunk)
-    assert chunk_bytes[0] in [ord("h"), ord(" ")]  # Could be start of either word
-    assert len(chunk) >= 2  # Should respect min_size
+    # Should get exactly 8 bytes starting with "hello wo"
+    assert chunk_bytes == b"hello wo"
 
 
 @pytest.mark.asyncio
@@ -835,9 +836,9 @@ async def test_spsc_buffer_managed_buffer_clone():
     chunk = await anext(stream)
     owned = bytes(chunk)
 
-    # Owned copy should be bytes
+    # Owned copy should be bytes with exact expected data
     assert isinstance(owned, bytes)
-    assert b"test" in owned or b"data" in owned
+    assert owned == b"test data"
 
 
 @pytest.mark.asyncio
@@ -894,9 +895,9 @@ async def test_spsc_buffer_stream_data_persistence():
     assert len(owned_copy) > 0
     assert len(second_data) > 0
 
-    # Verify they contain expected data (could be any split of the sent data)
+    # Verify exact data reconstruction
     all_data = owned_copy + second_data
-    assert b"persistent" in all_data or b"data" in all_data
+    assert all_data == b"persistentdata"
 
 
 @pytest.mark.asyncio
