@@ -7,80 +7,9 @@ from typing import Any, Callable
 
 from kioto.streams import Stream
 from kioto.sink import Sink
+from kioto.internal.buffer import BufferPool
 
 from . import error
-
-
-class BorrowedSlice:
-    """
-    A wrapper around a slice that can be invalidated to prevent use-after-mutation.
-    Provides zero-copy access with explicit ownership semantics.
-    """
-
-    def __init__(self, data: memoryview):
-        self._data = data
-        self._valid = True
-
-    def invalidate(self):
-        """Invalidate this borrowed slice, making it unusable."""
-        self._valid = False
-        self._data = None
-
-    def clone(self) -> bytes:
-        """Take ownership by copying the data."""
-        if not self._valid:
-            raise RuntimeError("Borrowed slice has been invalidated")
-        return bytes(self._data)
-
-    def _check_valid(self):
-        """Check if this slice is still valid."""
-        if not self._valid:
-            raise RuntimeError("Borrowed slice has been invalidated")
-
-    def __getitem__(self, key):
-        self._check_valid()
-        return self._data[key]
-
-    def __len__(self):
-        self._check_valid()
-        return len(self._data)
-
-    def __iter__(self):
-        self._check_valid()
-        return iter(self._data)
-
-    def __bytes__(self):
-        """Convert to bytes (creates a copy)."""
-        return self.clone()
-
-    def __eq__(self, other):
-        self._check_valid()
-        if isinstance(other, BorrowedSlice):
-            other._check_valid()
-            return self._data == other._data
-        return self._data == other
-
-    def __repr__(self):
-        if not self._valid:
-            return "BorrowedSlice(invalidated)"
-        return f"BorrowedSlice({len(self._data)} bytes)"
-
-    # Slice-like methods
-    def startswith(self, prefix):
-        self._check_valid()
-        return bytes(self._data).startswith(prefix)
-
-    def endswith(self, suffix):
-        self._check_valid()
-        return bytes(self._data).endswith(suffix)
-
-    def find(self, sub):
-        self._check_valid()
-        return bytes(self._data).find(sub)
-
-    def decode(self, encoding="utf-8", errors="strict"):
-        self._check_valid()
-        return bytes(self._data).decode(encoding, errors)
 
 
 def notify_one(waiters):
@@ -222,9 +151,9 @@ class SPSCBuffer:
 
         return to_write
 
-    def _pop_bytes(self, size: int) -> bytes:
+    def _pop_bytes(self, size: int) -> bytearray:
         """
-        Pop bytes from buffer, returns up to size bytes.
+        Pop bytes from buffer, returns up to size bytes as mutable buffer.
         This is lock-free for the receiver.
         """
         if not self._has_sender() and self._size() == 0:
@@ -234,18 +163,20 @@ class SPSCBuffer:
         to_read = min(size, available)
 
         if to_read == 0:
-            return b""
+            return bytearray()
 
         # Read data from circular buffer
         head_pos = self._head & self._mask
 
         if head_pos + to_read <= self._capacity:
             # No wrap around
-            result = bytes(self._buffer[head_pos : head_pos + to_read])
+            result = bytearray(self._buffer[head_pos : head_pos + to_read])
         else:
             # Handle wrap around
             first_part = self._capacity - head_pos
-            result = bytes(self._buffer[head_pos:] + self._buffer[: to_read - first_part])
+            result = bytearray(
+                self._buffer[head_pos:] + self._buffer[: to_read - first_part]
+            )
 
         # Update head atomically
         self._head = (self._head + to_read) & ((2 * self._capacity) - 1)
@@ -392,14 +323,17 @@ class SPSCReceiver:
         self._buffer = buffer
         self._buffer._register_receiver(self)
 
-    def recv(self, size: int) -> bytes:
+    def recv(self, size: int) -> bytearray:
         """
-        Receive up to size bytes synchronously.
+        Receive up to size bytes synchronously as bytearray copy.
         """
-        result = self._buffer._pop_bytes(size)
-        if result:
+        # Get raw data from ring buffer
+        raw_data = self._buffer._pop_bytes(size)
+        if raw_data:
             self._buffer._notify_writer()
-        return result
+
+        # Return as bytearray copy
+        return bytearray(raw_data)
 
     async def recv_into(self, out: bytearray) -> int:
         """
@@ -425,10 +359,10 @@ class SPSCReceiver:
             await self._buffer._wait_for_writer()
 
     def into_stream(
-        self, buffer_size: int = 8192, min_size: int = 1
+        self, buffer_size: int = 8192, min_size: int = 1, pool_size: int = 10
     ) -> "SPSCReceiverStream":
-        """Convert this receiver into a stream."""
-        return SPSCReceiverStream(self, buffer_size, min_size)
+        """Convert this receiver into a stream with managed buffer pool."""
+        return SPSCReceiverStream(self, buffer_size, min_size, pool_size)
 
 
 class SPSCSenderSink(Sink):
@@ -464,38 +398,36 @@ class SPSCSenderSink(Sink):
 class SPSCReceiverStream(Stream):
     """
     Stream implementation wrapping SPSCReceiver.
-    Provides zero-copy access through BorrowedSlice with explicit ownership semantics.
+    Returns memoryview instances that reference managed buffers with automatic lifecycle.
     """
 
     def __init__(
-        self, receiver: SPSCReceiver, buffer_size: int = 8192, min_size: int = 1
+        self,
+        receiver: SPSCReceiver,
+        buffer_size: int = 8192,
+        min_size: int = 1,
+        pool_size: int = 10,
     ):
         self._receiver = receiver
-        self._buffer_size = buffer_size
         self._min_size = min_size
-        self._internal_buffer = bytearray(buffer_size)
-        self._last_borrow = None  # Track the last borrowed slice
+        self._buffer_pool = BufferPool(buffer_size, pool_size)
 
-    async def __anext__(self):
+    async def __anext__(self) -> memoryview:
         try:
-            # Invalidate the previous borrow to prevent use-after-mutation
-            if self._last_borrow is not None:
-                self._last_borrow.invalidate()
-                self._last_borrow = None
-
             # Wait for minimum data
             await self._receiver.wait_for(self._min_size)
 
-            # Read into internal buffer
-            n_bytes = await self._receiver.recv_into(self._internal_buffer)
+            # Get fresh buffer from pool
+            managed_buffer = self._buffer_pool.get_buffer()
+
+            # Read data into the buffer
+            n_bytes = await self._receiver.recv_into(managed_buffer._buffer)
 
             if n_bytes == 0:
                 raise StopAsyncIteration
 
-            # Create a zero-copy borrowed slice
-            slice_view = memoryview(self._internal_buffer)[:n_bytes]
-            self._last_borrow = BorrowedSlice(slice_view)
-            return self._last_borrow
+            # Return memoryview slice - managed_buffer stays alive via closure
+            return managed_buffer.view(0, n_bytes)
 
         except error.SendersDisconnected:
             raise StopAsyncIteration

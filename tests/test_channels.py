@@ -10,7 +10,6 @@ from kioto.channels import (
     watch,
     spsc_buffer,
 )
-from kioto.channels.impl import BorrowedSlice
 
 
 @pytest.mark.asyncio
@@ -428,14 +427,15 @@ async def test_watch_channel_wait():
 
     # Send a value on the watch, both receivers should see the same value
     while tasks:
-        match await futures.select(tasks):
-            case ("a", _):
-                # There was a bug that broke notification if we sent
-                # two values while the receiver was waiting
-                tx.send(2)
-                tx.send(3)
-            case (_, value):
-                assert value == 3
+        result = await futures.select(tasks)
+        task_name, value = result
+        if task_name == "a":
+            # There was a bug that broke notification if we sent
+            # two values while the receiver was waiting
+            tx.send(2)
+            tx.send(3)
+        else:
+            assert value == 3
 
 
 @pytest.mark.asyncio
@@ -494,7 +494,8 @@ def test_spsc_buffer_basic_send_recv():
 
     # Receive the data
     received = rx.recv(len(data))
-    assert received == data
+    assert isinstance(received, bytearray)
+    assert bytes(received) == data
 
 
 def test_spsc_buffer_capacity_rounding():
@@ -528,7 +529,7 @@ def test_spsc_buffer_partial_send():
 
     # Receive some data to make space
     received = rx.recv(5)
-    assert received == b"x" * 5
+    assert received == bytearray(b"x" * 5)
 
     # Now we can send more
     data3 = b"z" * 5
@@ -547,7 +548,7 @@ def test_spsc_buffer_wraparound():
 
     # Read part of it
     received = rx.recv(4)
-    assert received == b"1234"
+    assert received == bytearray(b"1234")
 
     # Send more data (should wrap around)
     data2 = b"abcd"
@@ -556,11 +557,11 @@ def test_spsc_buffer_wraparound():
 
     # Read remaining original data
     received = rx.recv(4)
-    assert received == b"5678"
+    assert received == bytearray(b"5678")
 
-    # Read the wrapped data
+    # Read new data
     received = rx.recv(4)
-    assert received == b"abcd"
+    assert received == bytearray(b"abcd")
 
 
 @pytest.mark.asyncio
@@ -577,14 +578,14 @@ async def test_spsc_buffer_async_send():
 
     # Read some data to unblock sender
     received = rx.recv(4)
-    assert received == b"1234"
+    assert received == bytearray(b"1234")
 
     # Wait for async send to complete
     await send_task
 
     # Verify all data is correct
     received = rx.recv(8)
-    assert received == b"5678abcd"
+    assert received == bytearray(b"5678abcd")
 
 
 @pytest.mark.asyncio
@@ -625,7 +626,7 @@ async def test_spsc_buffer_wait_for():
 
     # Verify data is available
     data = rx.recv(5)
-    assert data == b"hello"
+    assert data == bytearray(b"hello")
 
 
 @pytest.mark.asyncio
@@ -681,7 +682,7 @@ async def test_spsc_buffer_sender_dropped():
 
     # Should be able to read existing data
     data = rx.recv(5)
-    assert data == b"hello"
+    assert data == bytearray(b"hello")
 
     # But waiting for more should fail
     with pytest.raises(error.SendersDisconnected):
@@ -717,7 +718,7 @@ async def test_spsc_buffer_sender_sink():
 
     # Read data
     data = rx.recv(11)
-    assert data == b"hello world"
+    assert data == bytearray(b"hello world")
 
     # Close sink
     await sink.close()
@@ -799,8 +800,8 @@ async def test_spsc_buffer_concurrent_operations():
 
 
 @pytest.mark.asyncio
-async def test_spsc_buffer_receiver_stream_borrowed_slice():
-    """Test receiver stream returns BorrowedSlice for zero-copy access."""
+async def test_spsc_buffer_receiver_stream_managed_buffer():
+    """Test receiver stream returns memoryview from managed buffer pool."""
 
     tx, rx = spsc_buffer(64)
     stream = rx.into_stream(buffer_size=8, min_size=2)
@@ -808,18 +809,21 @@ async def test_spsc_buffer_receiver_stream_borrowed_slice():
     # Send some data
     await tx.send_async(b"hello world")
 
-    # Get borrowed slice
-    borrowed = await anext(stream)
-    assert len(borrowed) <= 8  # Should respect buffer size
+    # Get memoryview from stream
+    chunk = await anext(stream)
+    assert isinstance(chunk, memoryview)
+    assert len(chunk) <= 8  # Should respect buffer size
+    assert len(chunk) >= 2  # Should respect min_size
 
-    # Can read from borrowed slice without copying
-    assert borrowed[0] in [ord("h"), ord(" ")]  # Could be start of either word
-    assert len(borrowed) >= 2  # Should respect min_size
+    # Can read from memoryview without copying
+    chunk_bytes = bytes(chunk)
+    # Should get exactly 8 bytes starting with "hello wo"
+    assert chunk_bytes == b"hello wo"
 
 
 @pytest.mark.asyncio
-async def test_spsc_buffer_borrowed_slice_clone():
-    """Test that BorrowedSlice.clone() creates owned copy."""
+async def test_spsc_buffer_managed_buffer_clone():
+    """Test that stream returns memoryview and can be converted to owned copy."""
 
     tx, rx = spsc_buffer(64)
     stream = rx.into_stream(buffer_size=16, min_size=1)
@@ -827,13 +831,13 @@ async def test_spsc_buffer_borrowed_slice_clone():
     # Send data
     await tx.send_async(b"test data")
 
-    # Get borrowed slice and clone it
-    borrowed = await anext(stream)
-    owned = borrowed.clone()
+    # Get memoryview from stream and make owned copy
+    chunk = await anext(stream)
+    owned = bytes(chunk)
 
-    # Owned copy should be bytes
+    # Owned copy should be bytes with exact expected data
     assert isinstance(owned, bytes)
-    assert b"test" in owned or b"data" in owned
+    assert owned == b"test data"
 
 
 @pytest.mark.asyncio
@@ -849,26 +853,27 @@ async def test_spsc_buffer_borrowed_slice_invalidation():
 
     # Get first borrowed slice
     first_borrowed = await anext(stream)
-    assert isinstance(first_borrowed, BorrowedSlice)
+    assert isinstance(first_borrowed, memoryview)
 
     # Accessing first slice should work
     _ = len(first_borrowed)
 
-    # Get second borrowed slice - this should invalidate the first
+    # Get second borrowed slice - both should remain valid in buffer pool design
     second_borrowed = await anext(stream)
-    assert isinstance(second_borrowed, BorrowedSlice)
+    assert isinstance(second_borrowed, memoryview)
 
-    # Now accessing first slice should raise exception
-    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
-        _ = len(first_borrowed)
+    # Both slices should still be valid (no invalidation in buffer pool design)
+    first_len = len(first_borrowed)
+    second_len = len(second_borrowed)
 
-    # Second slice should still be valid
-    _ = len(second_borrowed)
+    # Verify both have reasonable lengths
+    assert first_len > 0
+    assert second_len > 0
 
 
 @pytest.mark.asyncio
-async def test_spsc_buffer_borrowed_slice_clone_persistence():
-    """Test that cloned data persists after invalidation."""
+async def test_spsc_buffer_stream_data_persistence():
+    """Test that data from stream chunks can be persisted across multiple reads."""
 
     tx, rx = spsc_buffer(64)
     stream = rx.into_stream(buffer_size=8, min_size=1)
@@ -877,79 +882,50 @@ async def test_spsc_buffer_borrowed_slice_clone_persistence():
     await tx.send_async(b"persistent")
     await tx.send_async(b"data")
 
-    # Get first slice and clone it
-    first_borrowed = await anext(stream)
-    owned_copy = first_borrowed.clone()
+    # Get first chunk and make owned copy
+    first_chunk = await anext(stream)
+    owned_copy = bytes(first_chunk)
 
-    # Get second slice (invalidates first)
-    second_borrowed = await anext(stream)
+    # Get second chunk
+    second_chunk = await anext(stream)
+    second_data = bytes(second_chunk)
 
-    # Original borrowed slice should be invalid
-    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
-        _ = len(first_borrowed)
-
-    # But owned copy should still be accessible
-    assert isinstance(owned_copy, bytes)
+    # Owned copy should persist and be independent
     assert len(owned_copy) > 0
+    assert len(second_data) > 0
+
+    # Verify exact data reconstruction
+    all_data = owned_copy + second_data
+    assert all_data == b"persistentdata"
 
 
-def test_borrowed_slice_methods():
-    """Test BorrowedSlice slice-like methods."""
+@pytest.mark.asyncio
+async def test_spsc_buffer_stream_multiple_chunks():
+    """Test that stream can yield multiple chunks without issues."""
+
     tx, rx = spsc_buffer(64)
+    stream = rx.into_stream(buffer_size=8, min_size=1)
 
-    # Create a borrowed slice from some data
-    data = b"hello world"
-    view = memoryview(data)
-    borrowed = BorrowedSlice(view)
+    # Send data in chunks
+    await tx.send_async(b"first")
+    await tx.send_async(b"second")
 
-    # Test slice-like operations
-    assert len(borrowed) == 11
-    assert borrowed[0] == ord("h")
-    assert borrowed[6] == ord("w")
+    # Get first chunk
+    first_chunk = await anext(stream)
+    assert isinstance(first_chunk, memoryview)
 
-    # Test slice methods
-    assert borrowed.startswith(b"hello")
-    assert borrowed.endswith(b"world")
-    assert borrowed.find(b"world") == 6
-    assert borrowed.decode() == "hello world"
+    # Accessing first chunk should work
+    first_data = bytes(first_chunk)
+    assert len(first_data) > 0
 
-    # Test iteration
-    chars = list(borrowed)
-    assert chars[0] == ord("h")
+    # Get second chunk - should work fine (no invalidation needed)
+    second_chunk = await anext(stream)
+    assert isinstance(second_chunk, memoryview)
 
-    # Test equality
-    assert borrowed == b"hello world"
+    # Both chunks should still be accessible (no invalidation in buffer pool design)
+    first_data_again = bytes(first_chunk)
+    second_data = bytes(second_chunk)
 
-    # Test conversion to bytes
-    assert bytes(borrowed) == b"hello world"
-
-
-def test_borrowed_slice_invalidation():
-    """Test BorrowedSlice invalidation behavior."""
-
-    data = b"test data"
-    view = memoryview(data)
-    borrowed = BorrowedSlice(view)
-
-    # Should work initially
-    assert len(borrowed) == 9
-    assert borrowed[0] == ord("t")
-
-    # Invalidate
-    borrowed.invalidate()
-
-    # All operations should now raise exceptions
-    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
-        len(borrowed)
-
-    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
-        borrowed[0]
-
-    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
-        borrowed.clone()
-
-    with pytest.raises(RuntimeError, match="Borrowed slice has been invalidated"):
-        borrowed.startswith(b"test")
-
-    # Repr should indicate invalidation
-    assert "invalidated" in str(borrowed)
+    # Verify we got different data
+    assert len(first_data_again) > 0
+    assert len(second_data) > 0
