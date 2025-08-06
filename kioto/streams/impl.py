@@ -209,10 +209,8 @@ async def _buffered_unordered(stream, buffer_size: int):
         return spawned_task
 
     while tasks:
-        try:
-            completion = await select(tasks)
-        except StopAsyncIteration:
-            # If the underlying stream is exhausted, continue processing remaining tasks.
+        completion = await select(tasks)
+        if isinstance(completion[1], (StopAsyncIteration, asyncio.CancelledError)):
             continue
 
         match completion:
@@ -383,11 +381,10 @@ class Switch(Stream):
         tasks = task_set(anext=anext(self.stream))
 
         while tasks:
-            try:
-                result = await select(tasks)
-            except StopAsyncIteration:
+            result = await select(tasks)
+            if isinstance(result[1], (StopAsyncIteration, asyncio.CancelledError)):
                 # We have exhausted the stream, but we need to wait for our coroutine
-                # to yield its value downstream.
+                # to yield its value downstream or ignore cancelled tasks.
                 continue
 
             match result:
@@ -414,10 +411,10 @@ class Debounce(Stream):
         tasks = task_set(anext=anext(self.stream), delay=asyncio.sleep(self.duration))
 
         while tasks:
-            try:
-                result = await select(tasks)
-            except StopAsyncIteration:
+            result = await select(tasks)
+            if isinstance(result[1], (StopAsyncIteration, asyncio.CancelledError)):
                 # Stream is exhausted, but we still need to emit the pending elem once the delay elapses
+                # or ignore cancelled delay tasks.
                 continue
 
             match result:

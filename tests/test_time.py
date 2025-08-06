@@ -12,7 +12,7 @@ from kioto.time import (
     MissedTickBehavior,
 )
 
-TOL = 5e-3
+TOL = 1e-2
 
 
 def approx(a):

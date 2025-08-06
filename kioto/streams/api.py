@@ -62,11 +62,8 @@ def async_stream(f):
 async def select(**streams):
     group = impl.StreamSet(streams)
     while group.task_set():
-        try:
-            name, result = await futures.select(group.task_set())
-        except StopAsyncIteration:
+        name, result = await futures.select(group.task_set())
+        if isinstance(result, StopAsyncIteration):
             continue
-        else:
-            group.poll_again(name)
-
+        group.poll_again(name)
         yield name, result

@@ -308,6 +308,8 @@ async def test_channel_req_resp():
 
     # Shutdown the worker task
     worker.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await worker
 
 
 def test_watch_channel_send_recv():
@@ -471,6 +473,8 @@ async def test_watch_channel_cancel():
     task = asyncio.create_task(rx.changed())
     await asyncio.sleep(0.1)
     task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
     # Despite previous cancelation, we can still read the value
     tx.send(1)
