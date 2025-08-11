@@ -72,7 +72,7 @@ class Stream(Generic[T]):
     def zip(self, stream: "Stream[U]") -> "Stream[tuple[T, U]]":
         return Zip(self, stream)
 
-    def switch(self, coro: Callable[[T], Awaitable["Stream[U]"]]) -> "Stream[U]":
+    def switch(self, coro: Callable[[T], Awaitable[U]]) -> "Stream[U]":
         return Switch(self, coro)
 
     def debounce(self, duration: float) -> "Stream[T]":
@@ -388,69 +388,74 @@ class Zip(Stream[tuple[T, U]]):
         return (await anext(self.left), await anext(self.right))
 
 
+async def _switch(st: Stream[T], coro: Callable[[T], Awaitable[U]]) -> AsyncIterator[U]:
+
+    # Initialize a task set, with a coroutine to fetch the next item off the stream.
+    tasks = task_set(anext=anext(st))
+
+    while tasks:
+        try:
+            result = await select(tasks)
+        except StopAsyncIteration:
+            # We have exhausted the stream, but we need to wait for our coroutine
+            # to yield its value downstream.
+            continue
+
+        match result:
+            case ("anext", elem):
+                # A new element has come available, so cancel the pending result
+                # and schedule a new coroutine in its place
+                tasks.cancel("result")
+                tasks.update("result", coro(elem))
+                tasks.update("anext", anext(st))
+
+            case ("result", result):
+                # The coroutine finished without a new item cancelling it - yield.
+                yield result
+
 class Switch(Stream[U]):
-    def __init__(self, stream: Stream[T], coro: Callable[[T], Awaitable[Stream[U]]]):
-        self.coro = coro
-        self.stream = stream
+    def __init__(self, stream: Stream[T], coro: Callable[[T], Awaitable[U]]):
+        self.stream = _switch(stream, coro)
 
-    async def __aiter__(self) -> AsyncIterator[U]:
-        # Initialize a task set, with a coroutine to fetch the next item off the stream.
+    async def __anext__(self) -> U:
+        return await anext(self.stream)
 
-        tasks = task_set(anext=anext(self.stream))
 
-        while tasks:
-            try:
-                result = await select(tasks)
-            except StopAsyncIteration:
-                # We have exhausted the stream, but we need to wait for our coroutine
-                # to yield its value downstream.
-                continue
+async def _debounce(stream: Stream[T], duration: float) -> AsyncIterator[T]:
+    # Initialize a task set with tasks to get the next elem and a delay
+    pending: T | None = None
+    tasks = task_set(anext=anext(stream), delay=asyncio.sleep(duration))
 
-            match result:
-                case ("anext", elem):
-                    # A new element has come available, so cancel the pending result
-                    # and schedule a new coroutine in its place
-                    tasks.cancel("result")
-                    tasks.update("result", self.coro(elem))
-                    tasks.update("anext", anext(self.stream))
+    while tasks:
+        try:
+            result = await select(tasks)
+        except StopAsyncIteration:
+            # Stream is exhausted, but we still need to emit the pending elem once the delay elapses
+            continue
 
-                case ("result", result):
-                    # The coroutine finished without a new item cancelling it - yield.
-                    yield result
+        match result:
+            case ("anext", elem):
+                # Update the pending element with the latest item
+                pending = elem
+
+                # Push our delay further out
+                tasks.cancel("delay")
+                tasks.update("anext", anext(stream))
+                tasks.update("delay", asyncio.sleep(duration))
+
+            case ("delay", _):
+                # Our delay has elapsed - if we have a pending result, then yield it
+                if elem := pending:
+                    pending = None
+                    yield elem
 
 
 class Debounce(Stream[T]):
     def __init__(self, stream: Stream[T], duration: float):
-        self.stream = stream
-        self.duration = duration
+        self.stream = _debounce(stream, duration)
 
-    async def __aiter__(self) -> AsyncIterator[T]:
-        # Initialize a task set with tasks to get the next elem and a delay
-        pending: T | None = None
-        tasks = task_set(anext=anext(self.stream), delay=asyncio.sleep(self.duration))
-
-        while tasks:
-            try:
-                result = await select(tasks)
-            except StopAsyncIteration:
-                # Stream is exhausted, but we still need to emit the pending elem once the delay elapses
-                continue
-
-            match result:
-                case ("anext", elem):
-                    # Update the pending element with the latest item
-                    pending = elem
-
-                    # Push our delay further out
-                    tasks.cancel("delay")
-                    tasks.update("anext", anext(self.stream))
-                    tasks.update("delay", asyncio.sleep(self.duration))
-
-                case ("delay", _):
-                    # Our delay has elapsed - if we have a pending result, then yield it
-                    if elem := pending:
-                        pending = None
-                        yield elem
+    async def __anext__(self) -> T:
+        return await anext(self.stream)
 
 
 async def _once(value: T) -> AsyncIterator[T]:
