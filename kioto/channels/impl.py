@@ -1,15 +1,20 @@
+from __future__ import annotations
+
 import asyncio
 import threading
 import weakref
 
 from collections import deque
-from typing import Any, Callable
+from typing import Any, Callable, Deque, Generic, Optional, TypeVar, AsyncIterator, Awaitable
 
 from kioto.streams import Stream
 from kioto.sink import Sink
 from kioto.internal.buffer import BufferPool
 
 from . import error
+
+
+T = TypeVar("T")
 
 
 def notify_one(waiters):
@@ -25,11 +30,11 @@ def notify_all(waiters):
             tx.send(())
 
 
-def wait_for_notice(waiters):
+def wait_for_notice(waiters: Deque[OneShotSender[None]]) -> Awaitable[None]:
     # Create a oneshot channel
-    channel = OneShotChannel()
-    sender = OneShotSender(channel)
-    receiver = OneShotReceiver(channel)
+    channel: OneShotChannel[None] = OneShotChannel()
+    sender: OneShotSender[None] = OneShotSender(channel)
+    receiver: OneShotReceiver[None] = OneShotReceiver(channel)
 
     # register the tx side for notification
     waiters.append(sender)
@@ -433,13 +438,13 @@ class SPSCReceiverStream(Stream):
             raise StopAsyncIteration
 
 
-class Channel:
+class Channel(Generic[T]):
     """
     Internal Channel class managing the asyncio.Queue and tracking senders and receivers.
     """
 
     def __init__(self, maxsize: int | None):
-        self.sync_queue = deque([], maxlen=maxsize)
+        self.sync_queue: Deque[T] = deque([], maxlen=maxsize)
         self._senders = set()
         self._receivers = set()
 
@@ -459,10 +464,10 @@ class Channel:
     def full(self):
         return self.size() == self.capacity()
 
-    def register_sender(self, sender: "Sender"):
+    def register_sender(self, sender: "Sender[T]"):
         self._senders.add(weakref.ref(sender, self.sender_dropped))
 
-    def register_receiver(self, receiver: "Receiver"):
+    def register_receiver(self, receiver: "Receiver[T]"):
         self._receivers.add(weakref.ref(receiver, self.receiver_dropped))
 
     def has_receivers(self) -> bool:
@@ -494,16 +499,16 @@ class Channel:
         notify_one(self._recv_waiters)
 
 
-class Sender:
+class Sender(Generic[T]):
     """
     Sender class providing synchronous and asynchronous send methods.
     """
 
-    def __init__(self, channel: Channel):
+    def __init__(self, channel: Channel[T]):
         self._channel = channel
         self._channel.register_sender(self)
 
-    async def send_async(self, item: Any):
+    async def send_async(self, item: T):
         """
         Asynchronously send an item to the channel and wait until it's processed.
 
@@ -525,7 +530,7 @@ class Sender:
             # TODO: wait for receiver notification
             await self._channel.wait_for_receiver()
 
-    def send(self, item: Any):
+    def send(self, item: T):
         """
         Synchronously send an item to the channel.
 
@@ -545,7 +550,7 @@ class Sender:
         self._channel.sync_queue.append(item)
         self._channel.notify_receiver()
 
-    def into_sink(self) -> "SenderSink":
+    def into_sink(self) -> "SenderSink[T]":
         """
         Convert this Sender into a SenderSink.
 
@@ -561,16 +566,16 @@ class Sender:
         raise TypeError("Sender instances cannot be deep copied.")
 
 
-class Receiver:
+class Receiver(Generic[T]):
     """
     Receiver class providing synchronous and asynchronous recv methods.
     """
 
-    def __init__(self, channel: Channel):
+    def __init__(self, channel: Channel[T]):
         self._channel = channel
         self._channel.register_receiver(self)
 
-    async def recv(self) -> Any:
+    async def recv(self) -> T:
         """
         Asynchronously receive an item from the channel.
 
@@ -592,7 +597,7 @@ class Receiver:
 
             await self._channel.wait_for_sender()
 
-    def into_stream(self) -> "ReceiverStream":
+    def into_stream(self) -> "ReceiverStream[T]":
         """
         Convert this Receiver into a ReceiverStream.
 
@@ -608,22 +613,22 @@ class Receiver:
         raise TypeError("Receiver instances cannot be deep copied.")
 
 
-class SenderSink(Sink):
+class SenderSink(Sink, Generic[T]):
     """
     Sink implementation that wraps a Sender, allowing integration with Sink interfaces.
     """
 
-    def __init__(self, sender: Sender):
+    def __init__(self, sender: Sender[T]):
         self._sender = sender
         self._channel = sender._channel
         self._closed = False
 
-    async def feed(self, item: Any):
+    async def feed(self, item: T):
         if self._closed:
             raise error.SenderSinkClosed
         await self._sender.send_async(item)
 
-    async def send(self, item: Any):
+    async def send(self, item: T):
         if self._closed:
             raise error.SenderSinkClosed
         await self._sender.send_async(item)
@@ -638,34 +643,34 @@ class SenderSink(Sink):
             self._closed = True
 
 
-class ReceiverStream(Stream):
+class ReceiverStream(Stream[T]):
     """
     Stream implementation that wraps a Receiver, allowing integration with Stream interfaces.
     """
 
-    def __init__(self, receiver: Receiver):
+    def __init__(self, receiver: Receiver[T]):
         self._receiver = receiver
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         try:
             return await self._receiver.recv()
         except error.SendersDisconnected:
             raise StopAsyncIteration
 
 
-class OneShotChannel(asyncio.Future):
+class OneShotChannel(asyncio.Future[T]):
     def sender_dropped(self):
         if not self.done():
             exception = error.SendersDisconnected
             self.set_exception(exception)
 
 
-class OneShotSender:
-    def __init__(self, channel):
+class OneShotSender(Generic[T]):
+    def __init__(self, channel: OneShotChannel[T]):
         self._channel = channel
         weakref.finalize(self, channel.sender_dropped)
 
-    def send(self, value):
+    def send(self, value: T):
         if self._channel.done():
             raise error.SenderExhausted("Value has already been sent on channel")
 
@@ -679,35 +684,35 @@ class OneShotSender:
         loop.call_soon_threadsafe(setter)
 
 
-class OneShotReceiver:
-    def __init__(self, channel):
+class OneShotReceiver(Generic[T]):
+    def __init__(self, channel: OneShotChannel[T]):
         self._channel = channel
 
-    async def __call__(self):
+    async def __call__(self) -> T:
         return await self._channel
 
 
-class WatchChannel:
-    def __init__(self, initial_value: Any):
+class WatchChannel(Generic[T]):
+    def __init__(self, initial_value: T):
         # Tracks the version of the current value
         self._version = 0
 
         # Deque with maxlen=1 to store the current value
-        self._queue = deque([initial_value], maxlen=1)
+        self._queue: Deque[T] = deque([initial_value], maxlen=1)
 
         self._lock = threading.Lock()
-        self._waiters = deque()
+        self._waiters: Deque[OneShotSender[None]] = deque()
 
-        self._senders = weakref.WeakSet()
-        self._receivers = weakref.WeakSet()
+        self._senders: weakref.WeakSet[WatchSender[T]] = weakref.WeakSet()
+        self._receivers: weakref.WeakSet[WatchReceiver[T]] = weakref.WeakSet()
 
-    def register_sender(self, sender: "WatchSender"):
+    def register_sender(self, sender: "WatchSender[T]"):
         """
         Register a new sender to the channel.
         """
         self._senders.add(sender)
 
-    def register_receiver(self, receiver: "WatchReceiver"):
+    def register_receiver(self, receiver: "WatchReceiver[T]"):
         """
         Register a new receiver to the channel.
         """
@@ -725,7 +730,7 @@ class WatchChannel:
         """
         return len(self._receivers) > 0
 
-    def get_current_value(self) -> Any:
+    def get_current_value(self) -> T:
         """
         Retrieve the current value from the channel.
         """
@@ -737,7 +742,7 @@ class WatchChannel:
         """
         notify_all(self._waiters)
 
-    async def wait(self):
+    async def wait(self) -> None:
         # Create a oneshot channel
         channel = OneShotChannel()
         sender = OneShotSender(channel)
@@ -749,7 +754,7 @@ class WatchChannel:
         # wait for notification
         await receiver()
 
-    def set_value(self, value: Any):
+    def set_value(self, value: T):
         """
         Set a new value in the channel and increment the version.
         """
@@ -759,16 +764,16 @@ class WatchChannel:
             self.notify()
 
 
-class WatchSender:
+class WatchSender(Generic[T]):
     """
     Sender class providing methods to send and modify values in the watch channel.
     """
 
-    def __init__(self, channel: WatchChannel):
+    def __init__(self, channel: WatchChannel[T]):
         self._channel = channel
         self._channel.register_sender(self)
 
-    def subscribe(self) -> "WatchReceiver":
+    def subscribe(self) -> "WatchReceiver[T]":
         """
         Create a new receiver who is subscribed to this sender
         """
@@ -780,7 +785,7 @@ class WatchSender:
         """
         return len(self._channel._receivers)
 
-    def send(self, value: Any):
+    def send(self, value: T):
         """
         Asynchronously send a new value to the channel.
 
@@ -795,7 +800,7 @@ class WatchSender:
 
         self._channel.set_value(value)
 
-    def send_modify(self, func: Callable[[Any], Any]):
+    def send_modify(self, func: Callable[[T], T]):
         """
         Modify the current value using a provided function and send the updated value.
 
@@ -812,7 +817,7 @@ class WatchSender:
         new_value = func(current)
         self._channel.set_value(new_value)
 
-    def send_if_modified(self, func: Callable[[Any], Any]):
+    def send_if_modified(self, func: Callable[[T], T]):
         """
         Modify the current value using a provided function and send the updated value only if it has changed.
 
@@ -830,7 +835,7 @@ class WatchSender:
         if new_value != current:
             self._channel.set_value(new_value)
 
-    def borrow(self) -> Any:
+    def borrow(self) -> T:
         """
         Borrow the current value without marking it as seen.
 
@@ -840,17 +845,17 @@ class WatchSender:
         return self._channel.get_current_value()
 
 
-class WatchReceiver:
+class WatchReceiver(Generic[T]):
     """
     Receiver class providing methods to access and await changes in the watch channel.
     """
 
-    def __init__(self, channel: WatchChannel):
+    def __init__(self, channel: WatchChannel[T]):
         self._channel = channel
         self._last_version = channel._version  # Initialize with the current version
         self._channel.register_receiver(self)
 
-    def borrow(self) -> Any:
+    def borrow(self) -> T:
         """
         Borrow the current value without marking it as seen.
 
@@ -859,7 +864,7 @@ class WatchReceiver:
         """
         return self._channel.get_current_value()
 
-    def borrow_and_update(self) -> Any:
+    def borrow_and_update(self) -> T:
         """
         Borrow the current value and mark it as seen.
 
@@ -892,7 +897,7 @@ class WatchReceiver:
             # as senders would not be able to gain access to the underlying channel.
             await self._channel.wait()
 
-    def into_stream(self) -> "WatchReceiverStream":
+    def into_stream(self) -> "WatchReceiverStream[T]":
         """
         Convert this WatchReceiver into a WatchReceiverStream.
 
@@ -902,7 +907,7 @@ class WatchReceiver:
         return WatchReceiverStream(self)
 
 
-async def _watch_stream(receiver):
+async def _watch_stream(receiver: WatchReceiver[T]) -> AsyncIterator[T]:
     # Return the initial value in the watch
     yield receiver.borrow()
 
@@ -915,16 +920,16 @@ async def _watch_stream(receiver):
             break
 
 
-class WatchReceiverStream(Stream):
+class WatchReceiverStream(Stream[T]):
     """
     Stream implementation that wraps a WatchReceiver, allowing integration with Stream interfaces.
     """
 
-    def __init__(self, receiver: Receiver):
+    def __init__(self, receiver: WatchReceiver[T]):
         self._stream = _watch_stream(receiver)
 
-    async def __aiter__(self):
+    async def __aiter__(self) -> AsyncIterator[T]:
         return self._stream
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         return await anext(self._stream)
