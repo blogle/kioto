@@ -4,6 +4,7 @@ import time
 
 from kioto import streams
 from kioto.channels import channel
+from kioto.sink.impl import Sink
 
 
 @pytest.mark.asyncio
@@ -523,3 +524,136 @@ async def test_stream_select_once():
         # NOTE: There was a bug causing the previous task to be re-yielded
         assert name != "one"
         assert value != 1
+
+
+@pytest.mark.asyncio
+async def test_enumerate():
+    stream = streams.iter(["a", "b"]).enumerate()
+    assert await anext(stream) == (0, "a")
+    assert await stream.collect() == [(1, "b")]
+
+
+@pytest.mark.asyncio
+async def test_unzip():
+    left, right = await streams.iter([(1, "a"), (2, "b")]).unzip()
+    assert left == [1, 2]
+    assert right == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_count():
+    assert await streams.iter(range(5)).count() == 5
+
+
+@pytest.mark.asyncio
+async def test_cycle():
+    stream = streams.iter([1, 2]).cycle()
+    assert [await anext(stream) for _ in range(4)] == [1, 2, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_any_all():
+    assert await streams.iter(range(5)).any(lambda x: x == 3)
+    assert await streams.iter(range(5)).all(lambda x: x < 5)
+    assert not await streams.iter(range(5)).all(lambda x: x < 3)
+
+
+@pytest.mark.asyncio
+async def test_scan():
+    stream = streams.iter(range(1, 4)).scan(0, lambda acc, val: acc + val)
+    assert await stream.collect() == [1, 3, 6]
+
+
+@pytest.mark.asyncio
+async def test_skip_while():
+    async def pred(x):
+        await asyncio.sleep(0)
+        return x < 3
+
+    stream = streams.iter(range(5)).skip_while(pred)
+    assert await anext(stream) == 3
+    assert await stream.collect() == [4]
+
+
+@pytest.mark.asyncio
+async def test_take_while():
+    async def pred(x):
+        await asyncio.sleep(0)
+        return x < 3
+
+    stream = streams.iter(range(5)).take_while(pred)
+    assert await anext(stream) == 0
+    assert await stream.collect() == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_take_until():
+    async def stopper():
+        await asyncio.sleep(0.05)
+        return "done"
+
+    @streams.async_stream
+    async def st():
+        for i in range(10):
+            await asyncio.sleep(0.01)
+            yield i
+
+    # Case 1: stopper interrupts the collect()
+    stream = st().take_until(stopper())
+    assert await stream.collect() == [0, 1, 2, 3]
+    assert stream.take_result() == "done"
+
+    # Future already resolved
+    assert stream.take_future() is None
+
+    # Iterate the rest of the stream
+    assert await stream.collect() == [4, 5, 6, 7, 8, 9]
+
+    # Case 2: remove the stopper to iterate uninterrupted
+    stream = st().take_until(stopper())
+    assert await anext(stream) == 0
+    assert await anext(stream) == 1
+    stopper = stream.take_future()
+    assert await stream.collect() == [2, 3, 4, 5, 6, 7, 8, 9]
+    assert await stopper == "done"
+
+
+@pytest.mark.asyncio
+async def test_take():
+    stream = streams.iter(range(5)).take(3)
+    assert await stream.collect() == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_skip():
+    stream = streams.iter(range(5)).skip(2)
+    assert await anext(stream) == 2
+    assert await stream.collect() == [3, 4]
+
+
+class _ForwardSink(Sink):
+    def __init__(self):
+        self.items = []
+        self.flushed = False
+        self.closed = False
+
+    async def feed(self, item):
+        self.items.append(item)
+
+    async def send(self, item):
+        self.items.append(item)
+
+    async def flush(self):
+        self.flushed = True
+
+    async def close(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_forward():
+    sink = _ForwardSink()
+    await streams.iter([1, 2, 3]).forward(sink)
+    assert sink.items == [1, 2, 3]
+    assert sink.flushed
+    assert sink.closed

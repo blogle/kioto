@@ -15,10 +15,12 @@ from typing import (
 
 from kioto.futures import pending, select, task_set
 from kioto.internal.queue import SlotQueue
+from kioto.sink.impl import Sink
 
 
 T = TypeVar("T")
 U = TypeVar("U")
+R = TypeVar("R")
 
 
 class _Sentinel:
@@ -77,6 +79,62 @@ class Stream(Generic[T]):
 
     def debounce(self, duration: float) -> "Stream[T]":
         return Debounce(self, duration)
+
+    def enumerate(self) -> "Stream[tuple[int, T]]":
+        return Enumerate(self)
+
+    async def unzip(self: "Stream[tuple[T, U]]") -> tuple[list[T], list[U]]:
+        left: list[T] = []
+        right: list[U] = []
+        async for l, r in self:  # type: ignore[misc]
+            left.append(l)
+            right.append(r)
+        return left, right
+
+    async def count(self) -> int:
+        n = 0
+        async for _ in self:
+            n += 1
+        return n
+
+    def cycle(self) -> "Stream[T]":
+        return Cycle(self)
+
+    async def any(self, predicate: Callable[[T], bool]) -> bool:
+        async for val in self:
+            if predicate(val):
+                return True
+        return False
+
+    async def all(self, predicate: Callable[[T], bool]) -> bool:
+        async for val in self:
+            if not predicate(val):
+                return False
+        return True
+
+    def scan(self, acc: U, fn: Callable[[U, T], U]) -> "Stream[U]":
+        return Scan(self, acc, fn)
+
+    def skip_while(self, predicate: Callable[[T], Awaitable[bool]]) -> "Stream[T]":
+        return SkipWhile(self, predicate)
+
+    def take_while(self, predicate: Callable[[T], Awaitable[bool]]) -> "Stream[T]":
+        return TakeWhile(self, predicate)
+
+    def take_until(self, fut: Awaitable[R]) -> "TakeUntil[T, R]":
+        return TakeUntil(self, fut)
+
+    def take(self, n: int) -> "Stream[T]":
+        return Take(self, n)
+
+    def skip(self, n: int) -> "Stream[T]":
+        return Skip(self, n)
+
+    async def forward(self, sink: Sink) -> None:
+        async for item in self:
+            await sink.feed(item)
+        await sink.flush()
+        await sink.close()
 
     async def fold(self, fn: Callable[[U, T], U], acc: U) -> U:
         async for val in self:
@@ -386,6 +444,131 @@ class Zip(Stream[tuple[T, U]]):
 
     async def __anext__(self) -> tuple[T, U]:
         return (await anext(self.left), await anext(self.right))
+
+
+class Enumerate(Stream[tuple[int, T]]):
+    def __init__(self, stream: Stream[T]):
+        self.stream = stream
+        self.index = 0
+
+    async def __anext__(self) -> tuple[int, T]:
+        val = await anext(self.stream)
+        idx = self.index
+        self.index += 1
+        return idx, val
+
+
+async def _cycle(stream: Stream[T]) -> AsyncIterator[T]:
+    cache: list[T] = []
+    async for item in stream:
+        cache.append(item)
+        yield item
+    if not cache:
+        return
+    while True:
+        for item in cache:
+            yield item
+
+
+class Cycle(Stream[T]):
+    def __init__(self, stream: Stream[T]):
+        self.stream = _cycle(stream)
+
+    async def __anext__(self) -> T:
+        return await anext(self.stream)
+
+
+class Scan(Stream[U]):
+    def __init__(self, stream: Stream[T], acc: U, fn: Callable[[U, T], U]):
+        self.stream = stream
+        self.acc = acc
+        self.fn = fn
+
+    async def __anext__(self) -> U:
+        val = await anext(self.stream)
+        self.acc = self.fn(self.acc, val)
+        return self.acc
+
+
+class SkipWhile(Stream[T]):
+    def __init__(self, stream: Stream[T], predicate: Callable[[T], Awaitable[bool]]):
+        self.stream = stream
+        self.predicate = predicate
+        self.skipping = True
+
+    async def __anext__(self) -> T:
+        while True:
+            val = await anext(self.stream)
+            if self.skipping and await self.predicate(val):
+                continue
+            self.skipping = False
+            return val
+
+
+class TakeWhile(Stream[T]):
+    def __init__(self, stream: Stream[T], predicate: Callable[[T], Awaitable[bool]]):
+        self.stream = stream
+        self.predicate = predicate
+        self.done = False
+
+    async def __anext__(self) -> T:
+        if self.done:
+            raise StopAsyncIteration
+        val = await anext(self.stream)
+        if await self.predicate(val):
+            return val
+        self.done = True
+        raise StopAsyncIteration
+
+
+class Take(Stream[T]):
+    def __init__(self, stream: Stream[T], n: int):
+        self.stream = stream
+        self.remaining = n
+
+    async def __anext__(self) -> T:
+        if self.remaining <= 0:
+            raise StopAsyncIteration
+        self.remaining -= 1
+        return await anext(self.stream)
+
+
+class Skip(Stream[T]):
+    def __init__(self, stream: Stream[T], n: int):
+        self.stream = stream
+        self.n = n
+        self.skipped = False
+
+    async def __anext__(self) -> T:
+        if not self.skipped:
+            for _ in range(self.n):
+                await anext(self.stream)
+            self.skipped = True
+        return await anext(self.stream)
+
+
+class TakeUntil(Stream[T], Generic[T, R]):
+    def __init__(self, stream: Stream[T], stop: Awaitable[R]):
+        self._stream = stream
+        self._tasks = task_set(anext=anext(stream), stop=stop)
+        self._result = None
+
+    def take_future(self):
+        return self._tasks._tasks.pop("stop", None)
+
+    def take_result(self):
+        return self._result
+
+    async def __anext__(self) -> T:
+        if self._tasks:
+            match await select(self._tasks):
+                case ("stop", result):
+                    self._result = result
+                    raise StopAsyncIteration
+                case ("anext", value):
+                    # Re-poll the stream
+                    self._tasks.update("anext", anext(self._stream))
+                    return value
 
 
 async def _switch(st: Stream[T], coro: Callable[[T], Awaitable[U]]) -> AsyncIterator[U]:
