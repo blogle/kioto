@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Awaitable, Tuple, TypeVar
+from typing import Awaitable, TypeVar
 
 from kioto.channels import impl
 

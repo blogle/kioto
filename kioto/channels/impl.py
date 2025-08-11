@@ -5,7 +5,7 @@ import threading
 import weakref
 
 from collections import deque
-from typing import Any, Callable, Deque, Generic, Optional, TypeVar, AsyncIterator, Awaitable
+from typing import Callable, Deque, Generic, TypeVar, AsyncIterator, Awaitable
 
 from kioto.streams import Stream
 from kioto.sink import Sink

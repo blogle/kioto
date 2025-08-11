@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import builtins
-from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Optional, TypeVar, Generic
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Optional,
+    TypeVar,
+    Generic,
+)
 
 from kioto.futures import pending, select, task_set
 from kioto.internal.queue import SlotQueue

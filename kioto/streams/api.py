@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import functools
-from typing import Any, Callable, Iterable, TypeVar, Awaitable, AsyncIterator
+from typing import Any, Callable, Iterable, TypeVar, AsyncIterator
 
 from kioto import futures
 from kioto.streams import impl
