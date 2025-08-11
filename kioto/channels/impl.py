@@ -928,8 +928,5 @@ class WatchReceiverStream(Stream[T]):
     def __init__(self, receiver: WatchReceiver[T]):
         self._stream = _watch_stream(receiver)
 
-    async def __aiter__(self) -> AsyncIterator[T]:
-        return self._stream
-
     async def __anext__(self) -> T:
         return await anext(self._stream)
