@@ -17,4 +17,3 @@ class _AsyncFile:
 
 async def open(file, mode="r"):
     return _AsyncFile(builtins.open(file, mode))
-
