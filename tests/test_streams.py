@@ -592,21 +592,31 @@ async def test_take_until():
         await asyncio.sleep(0.05)
         return "done"
 
-    stop = asyncio.create_task(stopper())
-
     @streams.async_stream
     async def st():
         for i in range(10):
             await asyncio.sleep(0.01)
             yield i
 
-    stream = st().take_until(stop)
-    first = await stream.collect()
-    assert 4 <= len(first) <= 5
+    # Case 1: stopper interrupts the collect()
+    stream = st().take_until(stopper())
+    assert await stream.collect() == [0, 1, 2, 3]
     assert stream.take_result() == "done"
-    stream.take_future()
-    rest = await stream.collect()
-    assert len(first) + len(rest) == 10
+    
+    # Future already resolved
+    assert stream.take_future() is None
+
+    # Iterate the rest of the stream
+    assert await stream.collect() == [4, 5, 6, 7, 8, 9]
+
+
+    # Case 2: remove the stopper to iterate uninterrupted
+    stream = st().take_until(stopper())
+    assert await anext(stream) == 0
+    assert await anext(stream) == 1
+    stopper = stream.take_future()
+    assert await stream.collect() == [2, 3, 4, 5, 6, 7, 8, 9]
+    assert await stopper == "done"
 
 
 @pytest.mark.asyncio

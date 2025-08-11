@@ -546,42 +546,28 @@ class Skip(Stream[T]):
             self.skipped = True
         return await anext(self.stream)
 
-
 class TakeUntil(Stream[T], Generic[T, R]):
-    def __init__(self, stream: Stream[T], fut: Awaitable[R]):
-        self.stream = stream
-        self._future: asyncio.Task[R] | None = asyncio.create_task(fut)
-        self._result: R | None = None
-        self._stopped = False
+    def __init__(self, stream: Stream[T], stop: Awaitable[R]):
+        self._stream = stream
+        self._tasks = task_set(anext=anext(stream), stop=stop)
+        self._result = None
+
+    def take_future(self):
+        return self._tasks._tasks.pop("stop", None)
+
+    def take_result(self):
+        return self._result
 
     async def __anext__(self) -> T:
-        if self._stopped:
-            raise StopAsyncIteration
-        if self._future is None:
-            return await anext(self.stream)
-        next_task = asyncio.create_task(anext(self.stream))
-        done, _ = await asyncio.wait(
-            {next_task, self._future}, return_when=asyncio.FIRST_COMPLETED
-        )
-        if self._future in done:
-            self._result = self._future.result()
-            self._stopped = True
-            next_task.cancel()
-            raise StopAsyncIteration
-        return next_task.result()
-
-    def take_result(self) -> R | None:
-        if not self._stopped:
-            raise RuntimeError("stopping future has not resolved")
-        result = self._result
-        self._result = None
-        return result
-
-    def take_future(self) -> Awaitable[R] | None:
-        fut = self._future
-        self._future = None
-        self._stopped = False
-        return fut
+        if self._tasks:
+            match await select(self._tasks):
+                case ("stop", result):
+                    self._result = result
+                    raise StopAsyncIteration
+                case ("anext", value):
+                    # Re-poll the stream
+                    self._tasks.update("anext", anext(self._stream))
+                    return value
 
 
 async def _switch(st: Stream[T], coro: Callable[[T], Awaitable[U]]) -> AsyncIterator[U]:
