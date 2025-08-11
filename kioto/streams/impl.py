@@ -389,7 +389,6 @@ class Zip(Stream[tuple[T, U]]):
 
 
 async def _switch(st: Stream[T], coro: Callable[[T], Awaitable[U]]) -> AsyncIterator[U]:
-
     # Initialize a task set, with a coroutine to fetch the next item off the stream.
     tasks = task_set(anext=anext(st))
 
@@ -412,6 +411,7 @@ async def _switch(st: Stream[T], coro: Callable[[T], Awaitable[U]]) -> AsyncIter
             case ("result", result):
                 # The coroutine finished without a new item cancelling it - yield.
                 yield result
+
 
 class Switch(Stream[U]):
     def __init__(self, stream: Stream[T], coro: Callable[[T], Awaitable[U]]):
