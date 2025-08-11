@@ -602,13 +602,12 @@ async def test_take_until():
     stream = st().take_until(stopper())
     assert await stream.collect() == [0, 1, 2, 3]
     assert stream.take_result() == "done"
-    
+
     # Future already resolved
     assert stream.take_future() is None
 
     # Iterate the rest of the stream
     assert await stream.collect() == [4, 5, 6, 7, 8, 9]
-
 
     # Case 2: remove the stopper to iterate uninterrupted
     stream = st().take_until(stopper())

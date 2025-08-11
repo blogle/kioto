@@ -546,6 +546,7 @@ class Skip(Stream[T]):
             self.skipped = True
         return await anext(self.stream)
 
+
 class TakeUntil(Stream[T], Generic[T, R]):
     def __init__(self, stream: Stream[T], stop: Awaitable[R]):
         self._stream = stream
