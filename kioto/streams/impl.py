@@ -1,8 +1,24 @@
+from __future__ import annotations
+
 import asyncio
 import builtins
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Optional,
+    TypeVar,
+    Generic,
+)
 
 from kioto.futures import pending, select, task_set
 from kioto.internal.queue import SlotQueue
+
+
+T = TypeVar("T")
+U = TypeVar("U")
 
 
 class _Sentinel:
@@ -12,101 +28,101 @@ class _Sentinel:
         return "<_Sentinel>"
 
 
-class Stream:
-    def __aiter__(self):
+class Stream(Generic[T]):
+    def __aiter__(self) -> AsyncIterator[T]:
         return self
 
     @staticmethod
-    def from_generator(gen):
+    def from_generator(gen: Iterable[T] | AsyncIterator[T]) -> "Stream[T]":
         return _GenStream(gen)
 
-    def map(self, fn):
+    def map(self, fn: Callable[[T], U]) -> "Stream[U]":
         return Map(self, fn)
 
-    def then(self, coro):
+    def then(self, coro: Callable[[T], Awaitable[U]]) -> "Stream[U]":
         return Then(self, coro)
 
-    def filter(self, predicate):
+    def filter(self, predicate: Callable[[T], bool]) -> "Stream[T]":
         return Filter(self, predicate)
 
-    def buffered(self, n):
+    def buffered(self, n: int) -> "Stream[T]":
         return Buffered(self, n)
 
-    def buffered_unordered(self, n):
+    def buffered_unordered(self, n: int) -> "Stream[T]":
         return BufferedUnordered(self, n)
 
-    def flatten(self):
+    def flatten(self: "Stream[Stream[U]]") -> "Stream[U]":
         return Flatten(self)
 
-    def flat_map(self, fn):
+    def flat_map(self, fn: Callable[[T], "Stream[U]"]) -> "Stream[U]":
         return FlatMap(self, fn)
 
-    def chunks(self, n):
+    def chunks(self, n: int) -> "Stream[list[T]]":
         return Chunks(self, n)
 
-    def ready_chunks(self, n):
+    def ready_chunks(self, n: int) -> "Stream[list[T]]":
         return ReadyChunks(self, n)
 
-    def filter_map(self, fn):
+    def filter_map(self, fn: Callable[[T], Optional[U]]) -> "Stream[U]":
         return FilterMap(self, fn)
 
-    def chain(self, stream):
+    def chain(self, stream: "Stream[T]") -> "Stream[T]":
         return Chain(self, stream)
 
-    def zip(self, stream):
+    def zip(self, stream: "Stream[U]") -> "Stream[tuple[T, U]]":
         return Zip(self, stream)
 
-    def switch(self, coro):
+    def switch(self, coro: Callable[[T], Awaitable["Stream[U]"]]) -> "Stream[U]":
         return Switch(self, coro)
 
-    def debounce(self, duration):
+    def debounce(self, duration: float) -> "Stream[T]":
         return Debounce(self, duration)
 
-    async def fold(self, fn, acc):
+    async def fold(self, fn: Callable[[U, T], U], acc: U) -> U:
         async for val in self:
             acc = fn(acc, val)
         return acc
 
-    async def collect(self):
-        return [i async for i in aiter(self)]
+    async def collect(self) -> list[T]:
+        return [i async for i in builtins.aiter(self)]
 
 
-class Iter(Stream):
-    def __init__(self, iterable):
+class Iter(Stream[T]):
+    def __init__(self, iterable: Iterable[T]):
         self.iterable = builtins.iter(iterable)
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         try:
             return next(self.iterable)
         except StopIteration:
             raise StopAsyncIteration
 
 
-class Map(Stream):
-    def __init__(self, stream, fn):
+class Map(Stream[U]):
+    def __init__(self, stream: Stream[T], fn: Callable[[T], U]):
         self.fn = fn
         self.stream = stream
 
-    async def __anext__(self):
+    async def __anext__(self) -> U:
         return self.fn(await anext(self.stream))
 
 
-class Then(Stream):
-    def __init__(self, stream, fn):
+class Then(Stream[U]):
+    def __init__(self, stream: Stream[T], fn: Callable[[T], Awaitable[U]]):
         self.fn = fn
         self.stream = stream
 
-    async def __anext__(self):
+    async def __anext__(self) -> U:
         arg = await anext(self.stream)
         return await self.fn(arg)
 
 
-class Filter(Stream):
-    def __init__(self, stream, predicate):
+class Filter(Stream[T]):
+    def __init__(self, stream: Stream[T], predicate: Callable[[T], bool]):
         self.predicate = predicate
         self.stream = stream
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         while True:
             val = await anext(self.stream)
             if self.predicate(val):
@@ -162,17 +178,17 @@ async def _buffered(stream, buffer_size: int):
     await spawner_task
 
 
-class Buffered(Stream):
+class Buffered(Stream[T]):
     """
     Buffered stream that spawns tasks from an underlying stream with a specified buffer size.
 
     Results are yielded as soon as individual tasks complete.
     """
 
-    def __init__(self, stream, buffer_size: int):
+    def __init__(self, stream: Stream[Awaitable[T]], buffer_size: int):
         self.stream = _buffered(stream, buffer_size)
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         return await anext(self.stream)
 
 
@@ -237,7 +253,7 @@ async def _buffered_unordered(stream, buffer_size: int):
                 yield result
 
 
-class BufferedUnordered(Stream):
+class BufferedUnordered(Stream[T]):
     """
     Stream implementation that yields results from tasks in an unordered fashion.
 
@@ -245,48 +261,48 @@ class BufferedUnordered(Stream):
     As soon as any task completes, its result is yielded and its slot is freed for reuse.
     """
 
-    def __init__(self, stream, buffer_size: int):
+    def __init__(self, stream: Stream[Awaitable[T]], buffer_size: int):
         self.stream = _buffered_unordered(stream, buffer_size)
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         return await anext(self.stream)
 
 
-async def _flatten(nested_st):
+async def _flatten(nested_st: Stream[Stream[T]]) -> AsyncIterator[T]:
     async for stream in nested_st:
         async for val in stream:
             yield val
 
 
-class Flatten(Stream):
-    def __init__(self, stream):
+class Flatten(Stream[T]):
+    def __init__(self, stream: Stream[Stream[T]]):
         self.stream = _flatten(stream)
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         return await anext(self.stream)
 
 
-async def _flat_map(stream, fn):
+async def _flat_map(stream: Stream[T], fn: Callable[[T], Stream[U]]) -> AsyncIterator[U]:
     async for stream in stream.map(fn):
         async for val in stream:
             yield val
 
 
-class FlatMap(Stream):
-    def __init__(self, stream, fn):
+class FlatMap(Stream[U]):
+    def __init__(self, stream: Stream[T], fn: Callable[[T], Stream[U]]):
         self.stream = _flat_map(stream, fn)
 
-    async def __anext__(self):
+    async def __anext__(self) -> U:
         return await anext(self.stream)
 
 
-class Chunks(Stream):
-    def __init__(self, stream, n):
+class Chunks(Stream[list[T]]):
+    def __init__(self, stream: Stream[T], n: int):
         self.stream = stream
         self.n = n
 
-    async def __anext__(self):
-        chunk = []
+    async def __anext__(self) -> list[T]:
+        chunk: list[T] = []
         for _ in range(self.n):
             try:
                 chunk.append(await anext(self.stream))
@@ -301,19 +317,19 @@ async def spawn(n):
     queue = asyncio.Queue(maxsize=n)
 
 
-class ReadyChunks(Stream):
-    def __init__(self, stream, n):
+class ReadyChunks(Stream[list[T]]):
+    def __init__(self, stream: Stream[T], n: int):
         self.n = n
         self.stream = stream
-        self.pending = None
-        self.buffer = asyncio.Queue(maxsize=n)
+        self.pending: asyncio.Task | None = None
+        self.buffer: asyncio.Queue[T] = asyncio.Queue(maxsize=n)
 
-    async def push_anext(self):
+    async def push_anext(self) -> None:
         elem = await anext(self.stream)
         await self.buffer.put(elem)
 
-    async def __anext__(self):
-        chunk = []
+    async def __anext__(self) -> list[T]:
+        chunk: list[T] = []
         # Guarantee that we have at least one element in the buffer
         if self.pending:
             await self.pending
@@ -334,12 +350,12 @@ class ReadyChunks(Stream):
         return chunk
 
 
-class FilterMap(Stream):
-    def __init__(self, stream, fn):
+class FilterMap(Stream[U]):
+    def __init__(self, stream: Stream[T], fn: Callable[[T], Optional[U]]):
         self.stream = stream
         self.fn = fn
 
-    async def __anext__(self):
+    async def __anext__(self) -> U:
         while True:
             match self.fn(await anext(self.stream)):
                 case None:
@@ -348,36 +364,36 @@ class FilterMap(Stream):
                     return result
 
 
-async def _chain(left, right):
+async def _chain(left: Stream[T], right: Stream[T]) -> AsyncIterator[T]:
     async for val in left:
         yield val
     async for val in right:
         yield val
 
 
-class Chain(Stream):
-    def __init__(self, left, right):
+class Chain(Stream[T]):
+    def __init__(self, left: Stream[T], right: Stream[T]):
         self.stream = _chain(left, right)
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         return await anext(self.stream)
 
 
-class Zip(Stream):
-    def __init__(self, left, right):
+class Zip(Stream[tuple[T, U]]):
+    def __init__(self, left: Stream[T], right: Stream[U]):
         self.left = left
         self.right = right
 
-    async def __anext__(self):
+    async def __anext__(self) -> tuple[T, U]:
         return (await anext(self.left), await anext(self.right))
 
 
-class Switch(Stream):
-    def __init__(self, stream, coro):
+class Switch(Stream[U]):
+    def __init__(self, stream: Stream[T], coro: Callable[[T], Awaitable[Stream[U]]]):
         self.coro = coro
         self.stream = stream
 
-    async def __aiter__(self):
+    async def __aiter__(self) -> AsyncIterator[U]:
         # Initialize a task set, with a coroutine to fetch the next item off the stream.
 
         tasks = task_set(anext=anext(self.stream))
@@ -403,14 +419,14 @@ class Switch(Stream):
                     yield result
 
 
-class Debounce(Stream):
-    def __init__(self, stream, duration):
+class Debounce(Stream[T]):
+    def __init__(self, stream: Stream[T], duration: float):
         self.stream = stream
         self.duration = duration
 
-    async def __aiter__(self):
+    async def __aiter__(self) -> AsyncIterator[T]:
         # Initialize a task set with tasks to get the next elem and a delay
-        pending = None
+        pending: T | None = None
         tasks = task_set(anext=anext(self.stream), delay=asyncio.sleep(self.duration))
 
         while tasks:
@@ -437,47 +453,47 @@ class Debounce(Stream):
                         yield elem
 
 
-async def _once(value):
+async def _once(value: T) -> AsyncIterator[T]:
     yield value
 
 
-class Once(Stream):
-    def __init__(self, value):
+class Once(Stream[T]):
+    def __init__(self, value: T):
         self.stream = _once(value)
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         return await anext(self.stream)
 
 
-class Pending(Stream):
-    async def __anext__(self):
+class Pending(Stream[Any]):
+    async def __anext__(self) -> Any:
         return await pending()
 
 
-class Repeat(Stream):
-    def __init__(self, value):
+class Repeat(Stream[T]):
+    def __init__(self, value: T):
         self.value = value
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         return self.value
 
 
-class RepeatWith(Stream):
-    def __init__(self, fn):
+class RepeatWith(Stream[T]):
+    def __init__(self, fn: Callable[[], T]):
         self.fn = fn
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         return self.fn()
 
 
-class _GenStream(Stream):
-    def __init__(self, gen):
+class _GenStream(Stream[T]):
+    def __init__(self, gen: Iterable[T] | AsyncIterator[T]):
         if hasattr(gen, "__aiter__"):
             self.gen = gen
         else:
             self.gen = Iter(gen)
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         return await anext(self.gen)
 
 
